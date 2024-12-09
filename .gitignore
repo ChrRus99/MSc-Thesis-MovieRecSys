@@ -1,0 +1,10 @@
+TODO.txt
+.ipynb_checkpoints/
+__pycache__/
+**/.ipynb_checkpoints
+**/__pycache__
+resources/
+output/
+other/
+bkp/
+old/
