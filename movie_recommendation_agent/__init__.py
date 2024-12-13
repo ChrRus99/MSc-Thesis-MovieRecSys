@@ -1,0 +1,3 @@
+from movie_recommendation_agent.movie_recommendation_agent import create_movie_recommendation_agent
+
+__all__ = ["create_movie_recommendation_agent"]
