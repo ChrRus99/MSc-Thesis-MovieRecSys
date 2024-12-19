@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Annotated
 
 from main_graph import prompts
-#from shared.configuration import BaseConfiguration
+from shared.configuration import BaseConfiguration
 
 
 @dataclass(kw_only=True)
@@ -52,4 +52,9 @@ class AgentConfiguration(BaseConfiguration):
         },
     )
 
-    
+    sign_in_system_prompt: str = field(
+        default=prompts.SIGN_IN_SYSTEM_PROMPT,
+        metadata={
+            "description": "The system prompt used for signing in an already registered user."
+        },
+    )

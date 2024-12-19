@@ -6,119 +6,174 @@ user queries, handling the sign-up, the sing-in, and the issues report of the us
 personalized movies recommendations to the user.
 """
 
-from typing import Any, Literal, TypedDict, cast
+from typing import Any, Annotated, Literal, TypedDict, cast
 
-from langchain_core.messages import BaseMessage
+
+from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import tool, StructuredTool
+from langchain_core.tools.base import InjectedToolCallId
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
+from langchain.agents import Tool
 from langgraph.prebuilt import tools_condition, ToolNode
+from langgraph.prebuilt import InjectedState, create_react_agent
+from langgraph.types import Command, interrupt
 
 from main_graph.configuration import AgentConfiguration
-from rag_agent.retrieval_graph.graph import graph as rag_graph
+#from main_graph.recommendation_graph.graph import graph as recommendation_graph
 from main_graph.state import AgentState, InputState, Router
-from main_graph.tool import save_report_tool, sign_up_tool
-#from shared.utils import format_docs, load_chat_model
+from main_graph.tools import check_user_registration_tool, save_report_tool, sign_up_tool
+from shared.utils import load_chat_model
+from shared.debug_utils import (
+    state_log,
+    generic_log,
+    log_state_after_return
+)
 
 
-def route_restore_previous_conversation(
-    state: AgentState
-) -> Literal["greeting", "sing-in", "issue"]:
-    """ Restore the user's conversation from the last agent's state used. Default 'greeting' node.
+def make_handoff_tool(*, agent_name: str):
+    """Create a tool that can return handoff via a Command"""
+    tool_name = f"transfer_to_{agent_name}"
 
-    Args:
-        state (AgentState): The last used state of the agent, including the router's classification.
+    @tool(tool_name)
+    def handoff_to_agent(
+        state: Annotated[dict, InjectedState],
+        tool_call_id: Annotated[str, InjectedToolCallId],
+    ):
+        """Redirect to another agent."""
+        tool_message = {
+            "role": "tool",
+            "content": f"Successfully transferred to {agent_name}",
+            "name": tool_name,
+            "tool_call_id": tool_call_id,
+        }
 
-    Returns:
-        Literal["sign-up", "sing-in", "issue"]: 
-        The next step to take.
-    """
-    # Retrieve the last agent's state used by the user
-    _type = state.router["type"]
+        # DEBUG LOG
+        generic_log(
+            function_name="handoff_to_agent: " + tool_name, 
+            fields={
+                "tool_id": tool_call_id,
+                "tool_name": tool_name,
+                "transfer_to_agent": agent_name
+            }
+        )
 
-    # Route to the last used node of the rag agent, if it exists in the state
-    match _type:
-        case "greeting":
-            return "greeting"
-        case "sing-in":
-            return "sing_in"
-        case "issue":
-            return "report_issue"
-        case _:
-            # Default to the greeting node if no last node is found
-            return "greeting"
+        return Command(
+            # navigate to another agent node in the PARENT graph
+            goto=agent_name,
+            graph=Command.PARENT,
+            # This is the state update that the agent `agent_name` will see when it is invoked.
+            # We're passing agent's FULL internal message history AND adding a tool message to make sure
+            # the resulting chat history is valid.
+            update={"messages": state["messages"] + [tool_message]},
+        )
+
+    return handoff_to_agent
 
 
+@log_state_after_return
+async def human_node(
+    state: AgentState, *, config: RunnableConfig
+) -> Command[Literal["sign_up", "human"]]:
+    """A node for collecting user input."""
+    user_input = interrupt(value="Ready for user input.")
+
+    # identify the last active agent
+    # (the last active node before returning to human)
+    langgraph_triggers = config["metadata"]["langgraph_triggers"]
+    if len(langgraph_triggers) != 1:
+        raise AssertionError("Expected exactly 1 trigger in human node")
+
+    active_agent = langgraph_triggers[0].split(":")[1]
+
+    return Command(
+        update={
+            "messages": [
+                {
+                    "role": "human",
+                    "content": user_input,
+                }
+            ]
+        },
+        goto=active_agent,
+    )
+
+
+@log_state_after_return
 async def greeting_and_route_query(
     state: AgentState, *, config: RunnableConfig
-) -> dict[str, Router]:
-    """Greet the user, then analyze the user's query and determine the appropriate routing.
+) -> Command[Literal["sign_up", "sign_in"]]:
+    """
+    Greet the user, then analyze the user's query and determine the appropriate routing.
 
     This function uses a language model to classify the user's query and decide how to route it
-    within the conversation flow.
+    within the conversation flow, by checking whether the user is already registered.
 
     Args:
         state (AgentState): The current state of the agent, including conversation history.
         config (RunnableConfig): Configuration with the model used for query analysis.
 
     Returns:
-        dict[str, Router]: A dictionary containing the 'router' key with the classification result 
-                           (classification type and logic).
+        Command: The routing command indicating the next step.
     """
-    # Load the agent's language model specified in the input config
+    # Load the agent's language model and system prompt specified in the input config
     configuration = AgentConfiguration.from_runnable_config(config)
     model = load_chat_model(configuration.query_model)
-
-    # Format the system prompt to route the query
     system_prompt = configuration.greet_and_route_system_prompt
 
-    # Combine the system prompt with the agent's conversation history
-    messages = [{"role": "system", "content": system_prompt}] + state.messages
+    # Step 1: Generate greeting message
+    greeting_response = await model.ainvoke([
+        SystemMessage(content=system_prompt),
+        HumanMessage(content="Generate a greeting message for the user.")
+    ])
+    state.messages.append(AIMessage(content=greeting_response.content))
 
-    # Use the model to classify the query and ensure output matches the Router structure
-    response = cast(
-        Router, await model.with_structured_output(Router).ainvoke(messages)
+    # Step 2: Check user registration
+    user_id = int(config["configurable"]["user_id"])
+    
+    check_registration_tool = check_user_registration_tool(user_id)
+    tool_message = await check_registration_tool.ainvoke(
+        {
+            "name": "check_user_registration_tool",
+            "args": {},
+            "id": "123",
+            "type": "tool_call"
+        }
     )
 
-    # Return the classification result
-    return {"router": response}
+    is_registered = tool_message.artifact
+    # state.messages.append(tool_message) # SBAGLIATO
 
+    # Step 3: Generate routing with structured output
+    routing_response = await model.with_structured_output(Router).ainvoke([
+        SystemMessage(content="Analyze user registration status and provide routing."),
+        HumanMessage(content=f"User registered: {is_registered}")
+    ])
+    # state.messages.append(AIMessage(content=routing_response.content))
+    state.router = routing_response
 
-def route_query(
-    state: AgentState
-) -> Literal["sign-up", "sing-in", "issue"]:
-    """Determine the next step based on the query classification.
+    # Step 4: Notify the user about the routing
+    notification_response = await model.ainvoke([
+        SystemMessage(content="Notify the user about the routing result."),
+        HumanMessage(content=f"Routing decision: {routing_response}")
+    ])
+    state.messages.append(AIMessage(content=notification_response.content))
 
-    Args:
-        state (AgentState): The current state of the agent, including the router's classification.
+    # Return the structured routing result
+    return Command(
+        update={"messages": state.messages},
+        goto=routing_response['type']
+    )
 
-    Returns:
-        Literal["sign-up", "sing-in", "issue"]: 
-        The next step to take.
+# TODO: vedi se qua conviene usare Command per routing diretto senza usare conditional edges
+# vedi: https://www.youtube.com/watch?v=6BJDKf90L9A&ab_channel=LangChain
 
-    Raises:
-        ValueError: If an unknown router type is encountered.
-    """
-    # Retrieve the classification type from the router in the agent's state
-    _type = state.router["type"]
+# vedi anche questo https://langchain-ai.github.io/langgraph/how-tos/multi-agent-multi-turn-convo/
 
-    # Route based on the classification type
-    match _type:
-        case "sign-up":
-            return "sign_up"
-        case "sing-in":
-            return "sign_in"
-        case "issue":
-            return "report_issue"
-        case _:
-            # Raise an error if the type is not recognized
-            raise ValueError(f"Unknown router type {_type}")
+# vedi anche questo https://langchain-ai.github.io/langgraph/concepts/human_in_the_loop/#multi-turn-conversation
 
-
-# TODO vedi se creare 2 router diversi per non rischiare loop e casini vari
-# secondo me non serve perchè a livello logico si può regolare con prompt per evitare che vada in sign-up
-# verifica a livello fisico se risulta un edge condizionale verso sign-up!!! <<<---- !
-
+# vedi anche questo https://langchain-ai.github.io/langgraph/how-tos/agent-handoffs/#using-with-a-prebuilt-react-agent 
 
 async def report_issue(
     state: AgentState, *, config: RunnableConfig
@@ -138,46 +193,58 @@ async def report_issue(
     Returns:
         dict[str, list[str]]: A dictionary with a 'messages' key containing the generated response.
     """
-    # Load the agent's language model specified in the input config
+    # Load the agent's language model and the formatted system prompt specified in the input config
     configuration = AgentConfiguration.from_runnable_config(config)
     model = load_chat_model(configuration.query_model)
-
-    # Format the system prompt (using the router's logic) to request more information about the issue
     system_prompt = configuration.report_issue_system_prompt.format(
         logic=state.router["logic"]
     )
     
-    # Combine the system prompt with the agent's conversation history
-    messages = [{"role": "system", "content": system_prompt}] + state.messages
+    # Combine the system prompt with the current conversation history
+    messages = [SystemMessage(content=system_prompt)] + state.messages
 
-    # Bind the tool to the model
-    tool_func_instance = save_report_tool()
-    model_with_tool = model.bind_tools([tool_func_instance])
+    # Bind tools to the language model
+    tools = [save_report_tool()]
+    model_with_tools = model.bind_tools(tools)
 
     # Generate the response using the model with tools
-    response = await model_with_tool.ainvoke(messages)   
+    model_response = await model_with_tool.ainvoke(messages)   
     
-    # Check if tool calls are required based on the conversation state
-    if tools_condition(state) == "tools":
-        # Create and invoke the ToolNode with the tool function instance
-        tool_node = await ToolNode(tool_func_instance)
-        tool_response = await tool_node.ainvoke(state)
+    # My comment: secondo me questa parte non serve, perchè agente chiama tool già sopra, questo
+    # serve solo per chiamarlo post response es. tool per salvare i risultati
+    ################################################################################################
+    # Append the [AI model] response to the conversation history
+    #state.messages.append(model_response)
+    # state.messages.append(SystemMessage(content=str(model_response)))
 
-        ##############################################
-        # TODO: DA GESTIRE MEGLIO PERCHE' ARTIFACTS VANNO O INTEGRATI IN STATO AGGIUNGENDO FILED IN 
-        # STATE O VANNO IGNORATI SENZA INTEGRARLI IN STATO
+    # # Check if tool calls are required based on the conversation history
+    # if tools_condition({"messages": state.messages}) == "tools":
+    #     # Invoke tools and get their responses
+    #     tool_node = ToolNode(tools)
+    #     response = tool_node.invoke({"messages": state.messages})
 
-        # Process the tool responses and integrate them into the state
-        for tool_message in tool_response["messages"]:
-            messages.append({"role": "tool", "content": tool_message["content"]})
-            if tool_message["artifact"]:
-                state.update(tool_message["artifact"])
+    #     # Process the tool responses
+    #     for tool_message in response["messages"]:
+    #         # Append the [Tool] responses to the conversation history
+    #         state.messages.append(tool_message)
 
-        # Optionally reprocess the state with the agent after tools are invoked
-        return report_issue(state, config)
-        ##############################################
+    #         # Dynamically update state attributes with tool artifacts
+    #         if hasattr(tool_message, "artifact") and tool_message.artifact:
+    #             for key, value in tool_message.artifact.items():
+    #                 setattr(state, key, value)
 
-    return {"messages": [response]}
+    #     # Optionally reprocess the state with the agent after tools are invoked
+    #     if call_after_tool:
+    #         return greeting_and_route_query(state, config)
+    ################################################################################################
+
+    print("DEBUG ---> ", "report_issue")
+    print("DEBUG ---> ", type(model_response))
+    print("DEBUG ---> ", model_response)
+    print("")
+
+    # Return a message containing the model response
+    return {"messages": [model_response]}
 
     # HANDLE USER ISSUES, like the user does not know what to do, how this app works etc., or 
     # any real issues like some error, some bad behaviour of this app, some malfunctioning, etc.
@@ -185,55 +252,150 @@ async def report_issue(
     # Load the agent's language model specified in the input config
 
 
+@log_state_after_return
 async def sign_up(
     state: AgentState, *, config: RunnableConfig
-) -> dict[str, list[BaseMessage]]:
-    # Load the agent's language model specified in the input config
+) -> Command[Literal["sign_in", "human"]]:
+    """
+    Handles a user sign-up process with an iterative question-answer approach.
+
+    Args:
+        state (AgentState): The current conversation state.
+        config (RunnableConfig): The configuration containing model and tool bindings.
+
+    Returns:
+        dict[str, list[BaseMessage]]: The updated messages after processing sign-up.
+    """ 
+    # Load the agent's language model and the formatted system prompt specified in the input config
     configuration = AgentConfiguration.from_runnable_config(config)
     model = load_chat_model(configuration.query_model)
+    # system_prompt = configuration.sign_up_system_prompt.format(
+    #     logic=state.router["logic"]
+    # )
 
-    # Format the system prompt (using the router's logic) to request user's information
-    system_prompt = configuration.sign_up_system_prompt.format(
+    # Combine the system prompt with the current conversation history
+    #messages = [SystemMessage(content=system_prompt)] + state.messages
+
+    # Retrieve the user id and the thread id from the input config
+    user_id = config["configurable"]["user_id"]
+
+    # sign_up_tool_with_errors_management = StructuredTool.from_function(
+    #     func=sign_up_tool(user_id=user_id),
+    #     name="sign_up_tool",
+    #     handle_tool_error="There registration has failed due to missing user's data!"
+    # )
+
+    # sign_up_tools = [
+    #     sign_up_tool_with_errors_management,
+    #     make_handoff_tool(agent_name="sign_in"),
+    # ]
+
+    sign_up_tools = [
+        sign_up_tool(user_id=user_id),
+        make_handoff_tool(agent_name="sign_in"),
+    ]
+
+
+    # TODO:
+    # IDEA PER RISOLVERE SIGN-IN CREA FUNZIONE TOOL NORMALE PER REINDIRIZZARE A SIGN-IN E VEDI SE FUNZIONA
+    # RISOLVI PROBLEMA CHE SALVA DATI PARZIALMETNE
+
+
+    sign_up_assistant = create_react_agent(
+        model,
+        sign_up_tools,
+        state_modifier=(
+            "You are a sign-up assistant. You will interact with the user to gather their first name, surname, and email address to register them for the service.\n"
+            "Follow these steps:\n"
+            "1. Ask the user for their first name.\n"
+            "2. Once you have the first name, ask for their surname.\n"
+            "3. After getting the surname, ask for their email address.\n"
+            "4. When you have ALL three pieces of information (first name, surname, and email), use the `sign_up_tool` with the collected information.\n"
+            "5. After the `sign_up_tool` confirms successful registration, it will automatically transfer the user to the sign-in agent. There's no need to call the `transfer_to_sign_in` tool directly."
+        ),
+    )
+
+
+    # sign_up_assistant = create_react_agent(
+    #     model,
+    #     sign_up_tools,
+    #     state_modifier=(
+    #         "You are a sign-up assistant. You will interact with the user to gather their first name, surname, and email address to register them for the service.\n"
+    #         "Follow these steps:\n"
+    #         "1. Ask the user for their first name, surname, and email.\n"
+    #         "2. If the user does not provide all the data, ask again to provide the missing data, until the user provide all the data."
+    #         "3. Only when you have ALL three pieces of information (first name, surname, and email), use the `sign_up_tool` with the collected information.\n"
+    #         "4. Only after you have the confirm of registration from the sign_up_tool', you can transfer the user to the sign-in agent."
+    #     ),
+    # )
+
+
+    response = None
+
+    # Generate the response using the model with tools
+    try:
+        response = sign_up_assistant.invoke(state)
+        #print("------------> ", response)
+        #state.messages.append(AIMessage(content=response.content))
+    except Exception as e:
+        #state.messages.append(AIMessage(content=response))
+
+        # ERROR LOG
+        state_log(
+            function_name="sign_up", 
+            state=state,
+            additional_fields={"Error": e},
+            modality="error"
+        )
+        
+
+        # # Generate the response using the model with tools
+        # try:
+        #     response = sign_up_assistant.invoke(state)
+        #     print("------------> ", response)
+        #     #state.messages.append(AIMessage(content=response.content))
+        # except Exception as e:
+        #     #state.messages.append(AIMessage(content=response))
+
+        #     # ERROR LOG
+        #     state_log(
+        #         function_name="sign_up", 
+        #         state=state,
+        #         additional_fields={"Error": e},
+        #         modality="error"
+        #     )
+
+    return Command(update=response, goto="human")
+
+
+async def sign_in(
+    state: AgentState, *, config: RunnableConfig
+) -> Command[Literal[END]]:
+    print("DEBUG: IN sign_in")
+
+    # Load the agent's language model and the formatted system prompt specified in the input config
+    configuration = AgentConfiguration.from_runnable_config(config)
+    model = load_chat_model(configuration.query_model)
+    system_prompt = configuration.sign_in_system_prompt.format(
         logic=state.router["logic"]
     )
     
-    # Combine the system prompt with the agent's conversation history
-    messages = [{"role": "system", "content": system_prompt}] + state.messages
+    # Combine the system prompt with the current conversation history
+    messages = [SystemMessage(content=system_prompt)] + state.messages
 
-    # Bind the tool to the model
-    tool_func_instance = sign_up_tool()
-    model_with_tool = model.bind_tools([tool_func_instance])
+    # Generate the response using the model
+    model_response = model.ainvoke(messages)  
 
-    # Generate the response using the model with tools
-    response = await model_with_tool.ainvoke(messages)   
-    
-    # Check if tool calls are required based on the conversation state
-    if tools_condition(state) == "tools":
-        # Create and invoke the ToolNode with the tool function instance
-        tool_node = await ToolNode(tool_func_instance)
-        tool_response = await tool_node.ainvoke(state)
+    # DEBUG LOG
+    state_log(
+        function_name="sign_in", 
+        state=state
+    )
 
-        ##############################################
-        # TODO: DA GESTIRE MEGLIO PERCHE' ARTIFACTS VANNO O INTEGRATI IN STATO AGGIUNGENDO FILED IN 
-        # STATE O VANNO IGNORATI SENZA INTEGRARLI IN STATO
+    # Return a message containing the model response
+    return Command(update=response, goto=END)
+    return {"messages": [model_response]}
 
-        # Process the tool responses and integrate them into the state
-        for tool_message in tool_response["messages"]:
-            messages.append({"role": "tool", "content": tool_message["content"]})
-            if tool_message["artifact"]:
-                state.update(tool_message["artifact"])
-
-        # Optionally reprocess the state with the agent after tools are invoked
-        return report_issue(state, config)
-        ##############################################
-
-    return {"messages": [response]}
-
-    # Please provide your name, surname and email to start the conversation.
-    # Ask previous seen movies -> to solve cold issue problem
-
-# TODO rimetti sign-in come scritto sotto (da fare alla fine) -> vedi bene come gestire utente
-async def sign_in():
     # Load user preferences and other data
     # Do not generate any message, just load user preferences in state
 
@@ -260,10 +422,12 @@ async def recommendation(state: AgentState) -> dict[str, Any]:
         - Updates the state with the retrieved documents and removes the completed step.
     """
     # Invoke the rag_graph with...
-    result = await rag_graph.ainvoke({"question": state.steps[0]})
+    #result = await rag_graph.ainvoke({"question": state.steps[0]})
 
     # Return the research results ('documents') and ...
-    return {"documents": result["documents"], "steps": state.steps[1:]}
+    #return {"documents": result["documents"], "steps": state.steps[1:]}
+
+    pass
     
 
     # (at this point the user is signed-in)
@@ -273,16 +437,20 @@ async def recommendation(state: AgentState) -> dict[str, Any]:
 
 # Define the graph
 builder = StateGraph(AgentState, input=InputState, config_schema=AgentConfiguration)
-builder.add_node(greeting)
-builder.add_node(report_issue)
-builder.add_node(sign_up)
-builder.add_node(recommendation)
+builder.add_node("human", human_node)
+builder.add_node("greeting_and_route_query", greeting_and_route_query)
+#builder.add_node(report_issue)
+builder.add_node("sign_up", sign_up)
+builder.add_node("sign_in", sign_in)
+#builder.add_node(recommendation)
 
-builder.add_conditional_edges(START, route_restore_previous_conversation)
-builder.add_conditional_edges("greeting", route_query)
-builder.add_edge("sign_up", "recommendation")
-builder.add_edge("recommendation", END)
+builder.add_edge(START, "greeting_and_route_query")
+#builder.add_conditional_edges("greeting_and_route_query", route_query)
+#builder.add_conditional_edges("sign_up", check_registration_data)
+builder.add_edge("sign_in", END)
+#builder.add_edge("sign_in", "recommendation")
+#builder.add_edge("recommendation", END)
 
 # Compile into a graph object that you can invoke and deploy.
-# graph = builder.compile()
-# graph.name = "RecommendationGraph"
+graph = builder.compile()
+graph.name = "RecommendationGraph"

@@ -5,7 +5,7 @@ for agent state, input state, and router classification schema.
 """
 
 from dataclasses import dataclass, field
-from typing import Annotated, Literal, TypedDict
+from typing import Annotated, Literal, TypedDict, Optional
 
 from langchain_core.documents import Document
 from langchain_core.messages import AnyMessage
@@ -55,8 +55,15 @@ class Router(TypedDict):
     logic: str
     """A string field that represents the reasoning or intent behind the routing decision."""
 
-    type: Literal["greeting", "sign-in", "sign-up", "issue"]
+    type: Literal["greeting_and_route_query", "sign_up", "sign_in", "report_issue"]
     """A string literal field that specifies the classification type."""
+
+
+# Define TypedDict for user data
+class UserData(TypedDict, total=False):  # total=False makes fields optional
+    first_name: str
+    last_name: str
+    email: str
 
 
 # This is the primary state of your agent, where you can store any information.
@@ -67,8 +74,11 @@ class AgentState(InputState):
     router: Router = field(default_factory=lambda: Router(type="general", logic=""))
     """The router's classification of the user's query."""
 
+    is_registered: Optional[bool] = None
+    user_data: UserData = field(default_factory=dict)
+
     # TODO cambia tipo dato passato nella lista, crea tipo ad-hoc in shared/utils
-    documents: Annotated[list[Document], reduce_docs] = field(default_factory=list)
+    #documents: Annotated[list[Document], reduce_docs] = field(default_factory=list)
     """Populated by the retriever. This is a list of documents that the agent can reference."""
 
     # Feel free to add additional attributes to your state as needed.
