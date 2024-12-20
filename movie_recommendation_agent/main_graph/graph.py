@@ -8,7 +8,6 @@ personalized movies recommendations to the user.
 
 from typing import Any, Annotated, Literal, TypedDict, cast
 
-
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool, StructuredTool
@@ -38,18 +37,19 @@ def make_handoff_tool(*, agent_name: str):
 
     @tool(tool_name)
     def handoff_to_agent(
-        state: Annotated[dict, InjectedState],
+        state: Annotated[AgentState, InjectedState],
         tool_call_id: Annotated[str, InjectedToolCallId],
-    ):
-        """Redirect to another agent."""
-        tool_message = {
-            "role": "tool",
-            "content": f"Successfully transferred to {agent_name}",
-            "name": tool_name,
-            "tool_call_id": tool_call_id,
-        }
+    ) -> Command[Literal["sign_in"]]:
+        """Redirect to the sign-in agent."""
 
-        # DEBUG LOG
+        # Constructing the tool message
+        tool_message = ToolMessage(
+            content=f"Successfully transferred to {agent_name}",
+            role="tool",
+            name=tool_name,
+            tool_call_id=tool_call_id,
+        )
+
         generic_log(
             function_name="handoff_to_agent: " + tool_name, 
             fields={
@@ -59,16 +59,16 @@ def make_handoff_tool(*, agent_name: str):
             }
         )
 
+        # Modifying state messages directly with tool message
+        state.messages.append(tool_message)  # Correct way to modify the list
+
+        # Constructing the command with just the necessary attributes
         return Command(
-            # navigate to another agent node in the PARENT graph
             goto=agent_name,
             graph=Command.PARENT,
-            # This is the state update that the agent `agent_name` will see when it is invoked.
-            # We're passing agent's FULL internal message history AND adding a tool message to make sure
-            # the resulting chat history is valid.
-            update={"messages": state["messages"] + [tool_message]},
+            update={"messages": state.messages}  # Ensure the update key is properly referencing the list
         )
-
+    
     return handoff_to_agent
 
 
@@ -279,42 +279,11 @@ async def sign_up(
     # Retrieve the user id and the thread id from the input config
     user_id = config["configurable"]["user_id"]
 
-    # sign_up_tool_with_errors_management = StructuredTool.from_function(
-    #     func=sign_up_tool(user_id=user_id),
-    #     name="sign_up_tool",
-    #     handle_tool_error="There registration has failed due to missing user's data!"
-    # )
-
-    # sign_up_tools = [
-    #     sign_up_tool_with_errors_management,
-    #     make_handoff_tool(agent_name="sign_in"),
-    # ]
-
     sign_up_tools = [
         sign_up_tool(user_id=user_id),
         make_handoff_tool(agent_name="sign_in"),
+        
     ]
-
-
-    # TODO:
-    # IDEA PER RISOLVERE SIGN-IN CREA FUNZIONE TOOL NORMALE PER REINDIRIZZARE A SIGN-IN E VEDI SE FUNZIONA
-    # RISOLVI PROBLEMA CHE SALVA DATI PARZIALMETNE
-
-
-    sign_up_assistant = create_react_agent(
-        model,
-        sign_up_tools,
-        state_modifier=(
-            "You are a sign-up assistant. You will interact with the user to gather their first name, surname, and email address to register them for the service.\n"
-            "Follow these steps:\n"
-            "1. Ask the user for their first name.\n"
-            "2. Once you have the first name, ask for their surname.\n"
-            "3. After getting the surname, ask for their email address.\n"
-            "4. When you have ALL three pieces of information (first name, surname, and email), use the `sign_up_tool` with the collected information.\n"
-            "5. After the `sign_up_tool` confirms successful registration, it will automatically transfer the user to the sign-in agent. There's no need to call the `transfer_to_sign_in` tool directly."
-        ),
-    )
-
 
     # sign_up_assistant = create_react_agent(
     #     model,
@@ -322,18 +291,41 @@ async def sign_up(
     #     state_modifier=(
     #         "You are a sign-up assistant. You will interact with the user to gather their first name, surname, and email address to register them for the service.\n"
     #         "Follow these steps:\n"
-    #         "1. Ask the user for their first name, surname, and email.\n"
-    #         "2. If the user does not provide all the data, ask again to provide the missing data, until the user provide all the data."
-    #         "3. Only when you have ALL three pieces of information (first name, surname, and email), use the `sign_up_tool` with the collected information.\n"
-    #         "4. Only after you have the confirm of registration from the sign_up_tool', you can transfer the user to the sign-in agent."
+    #         "1. Ask the user for their first name.\n"
+    #         "2. Once you have the first name, ask for their surname.\n"
+    #         "3. After getting the surname, ask for their email address.\n"
+    #         "4. When you have ALL three pieces of information (first name, surname, and email), use the `sign_up_tool` with the collected information.\n"
+    #         "5. After the `sign_up_tool` confirms successful registration, it will automatically transfer the user to the sign-in agent. There's no need to call the `transfer_to_sign_in` tool directly."
     #     ),
     # )
+
+    # sign_up_assistant = create_react_agent(
+    #     model,
+    #     sign_up_tools,
+    #     state_modifier=(
+    #         "Call and redirect to the `sign_in` agent."
+    #     ),
+    # )
+
+    sign_up_assistant = create_react_agent(
+        model,
+        sign_up_tools,
+        state_modifier=(
+            "You are a sign-up assistant. You will interact with the user to gather their first name, surname, and email address to register them for the service.\n"
+            "Follow these steps:\n"
+            "1. Ask the user for their first name, surname, and email.\n"
+            "2. If the user does not provide all the data, ask again to provide the missing data, until the user provide all the data."
+            "3. Only when you have ALL three pieces of information (first name, surname, and email), use the `sign_up_tool` with the collected information.\n"
+            "4. Only after you have the confirm of registration from the sign_up_tool', you can transfer the user to the `sign-in` agent."
+        ),
+    )
 
 
     response = None
 
     # Generate the response using the model with tools
     try:
+
         response = sign_up_assistant.invoke(state)
         #print("------------> ", response)
         #state.messages.append(AIMessage(content=response.content))
@@ -347,32 +339,31 @@ async def sign_up(
             additional_fields={"Error": e},
             modality="error"
         )
-        
 
-        # # Generate the response using the model with tools
-        # try:
-        #     response = sign_up_assistant.invoke(state)
-        #     print("------------> ", response)
-        #     #state.messages.append(AIMessage(content=response.content))
-        # except Exception as e:
-        #     #state.messages.append(AIMessage(content=response))
+        # FORZA TRASFERIMENTO
+        ############################################################
+        return Command(goto="sign_in")
+        ############################################################
 
-        #     # ERROR LOG
-        #     state_log(
-        #         function_name="sign_up", 
-        #         state=state,
-        #         additional_fields={"Error": e},
-        #         modality="error"
-        #     )
+        #raise e
+        return Command(
+            update={
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "Error sign_in",
+                    }
+                ]
+            }, 
+        goto="sign_up")
 
     return Command(update=response, goto="human")
 
 
+@log_state_after_return
 async def sign_in(
     state: AgentState, *, config: RunnableConfig
 ) -> Command[Literal[END]]:
-    print("DEBUG: IN sign_in")
-
     # Load the agent's language model and the formatted system prompt specified in the input config
     configuration = AgentConfiguration.from_runnable_config(config)
     model = load_chat_model(configuration.query_model)
@@ -381,20 +372,21 @@ async def sign_in(
     )
     
     # Combine the system prompt with the current conversation history
-    messages = [SystemMessage(content=system_prompt)] + state.messages
+    #messages = [SystemMessage(content=system_prompt)] + state.messages
+    
 
     # Generate the response using the model
-    model_response = model.ainvoke(messages)  
+    model_response = await model.ainvoke([
+        SystemMessage(content=system_prompt),
+        HumanMessage(content="Confirm the user that is signed in.")
+    ])
+    state.messages.append(AIMessage(content=model_response.content))
 
-    # DEBUG LOG
-    state_log(
-        function_name="sign_in", 
-        state=state
+    # # Return a message containing the model response
+    return Command(
+        update={"messages": state.messages},
+        goto=END
     )
-
-    # Return a message containing the model response
-    return Command(update=response, goto=END)
-    return {"messages": [model_response]}
 
     # Load user preferences and other data
     # Do not generate any message, just load user preferences in state
