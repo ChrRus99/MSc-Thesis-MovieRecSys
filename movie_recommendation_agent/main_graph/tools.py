@@ -1,11 +1,13 @@
-from typing import Annotated, Dict, Tuple
+from typing import Annotated, Dict, Tuple, List
 
 from langchain_core.tools import tool, ToolException
 
-from main_graph.state import UserData
+from main_graph.state import AgentState, UserData, Movie
 from shared.utils import (
     is_user_registered,
     save_user_info,
+    load_user_info,
+    load_user_seen_movies
 )
 from shared.debug_utils import (
     state_log,
@@ -13,7 +15,7 @@ from shared.debug_utils import (
 )
 
 
-def check_user_registration_tool(user_id: int):
+def check_user_registration_tool(state: AgentState):
     """
     Creates a tool function to check if a user is already registered.
 
@@ -21,7 +23,7 @@ def check_user_registration_tool(user_id: int):
     the system, helping the greeting agent to route correctly.
 
     Args:
-        user_id (int): The unique identifier of the user.
+        state (AgentState): The current conversation state.
 
     Returns:
         Callable: A coroutine tool function that checks the user's registration status.
@@ -35,6 +37,9 @@ def check_user_registration_tool(user_id: int):
                 - str: A message indicating whether the user is registered or not.
                 - bool: True if the user is registered, False otherwise.
         """
+        # Extract user id from state
+        user_id = state.user_id
+
         # DEBUG LOG
         generic_log(
             function_name="check_user_registration_tool", 
@@ -46,6 +51,7 @@ def check_user_registration_tool(user_id: int):
 
         # Check if the user is already registered
         is_registered = is_user_registered(user_id)
+        state.is_user_registered = is_registered  # Update the state
 
         # Serialize the results
         serialized = f"User {'is' if is_registered else 'is not'} registered."
@@ -60,7 +66,7 @@ def check_user_registration_tool(user_id: int):
 # vedi: https://python.langchain.com/docs/how_to/custom_tools/
 # nota: Annotated not present error è dovuto a @tool(parse_docstring=True, response_format="content_and_artifact") (commenta per risolvere)
 
-def sign_up_tool(user_id: int):
+def register_user_tool(state: AgentState):
     """
     Creates a tool function to handle user sign-up by saving user details.
 
@@ -68,7 +74,7 @@ def sign_up_tool(user_id: int):
     helping the sign_up agent to register the user.
 
     Args:
-        user_id (int): Unique identifier for the user.
+        state (AgentState): The current conversation state.
 
     Returns:
         Callable: A tool function that accepts user details and returns a success message along 
@@ -76,7 +82,7 @@ def sign_up_tool(user_id: int):
     """
     @tool(parse_docstring=True, response_format="content_and_artifact")
     def tool_func(first_name: str, last_name: str, email: str) -> Tuple[str, Dict]:
-        """ A tool that saves user first and last name.
+        """ A tool that saves user first, last name and email.
         
         Args:
             first_name: The user's first name.
@@ -88,11 +94,14 @@ def sign_up_tool(user_id: int):
                 - str: A message indicating the registration details.
                 - dict: A dictionary containing user data.
         """
+        # Extract user id from state
+        user_id = state.user_id
+
         # DEBUG LOG
         generic_log(
-            function_name="sign_up_tool", 
+            function_name="register_user_tool", 
             messages= [
-                "Called Tool: [sign_up_tool]",
+                "Called Tool: [register_user_tool]",
                 f"Creating User: {user_id}, {first_name}, {last_name}, {email}"
             ]
         )
@@ -112,6 +121,8 @@ def sign_up_tool(user_id: int):
 
         # Save the user data to the CSV file
         save_user_info(user_metadata)        
+        state.user_data.update(user_metadata)  # Update the state
+        state.is_user_registered = True  # Update the state
 
         # Serialize the results
         serialized = f"User {user_id} has been successfully registered."
@@ -122,6 +133,64 @@ def sign_up_tool(user_id: int):
     return tool_func
 
 
+def load_user_data_tool(state: AgentState):
+    """
+    Creates a tool function to load user's personal details and seen movies data.
+
+    This factory function generates a tool that loads the personal details and seen movies of a user,
+    allowing the sign_in agent to load user's preferences.
+    Args:
+        state (AgentState): The current conversation state.
+
+    Returns:
+        Callable: A tool function that accepts user details and returns a success message along 
+                  with user data as a list of dictionaries.
+    """
+    @tool(parse_docstring=True, response_format="content_and_artifact")
+    def tool_func() -> Tuple[str, List[Dict[str, str]]]:
+        """ A tool that loads user seen movies.
+        
+        Args:
+            None
+
+        Returns:
+            Tuple:
+                - str: A message indicating the user data has been loaded.
+                - list: A list of dictionaries containing the user's personal data and seen movies
+                        data.
+        """
+        # Extract user id from state
+        user_id = state.user_id
+
+        # DEBUG LOG
+        generic_log(
+            function_name="load_user_data_tool",
+            messages=[
+                "Called Tool: [load_user_data_tool]",
+                f"Loading user's personal details and seen movies for user ID: {user_id}"
+            ]
+        )
+
+        # Load user's personal details (if not passed through sign_up process before)
+        if not state.user_data:
+            user_data = load_user_info(user_id)
+            state.user_data.update(user_data)  # Update the state
+
+        # Load user seen movies from the CSV file
+        seen_movies = load_user_seen_movies(user_id)
+        state.seen_movies.extend(seen_movies)  # Update the state
+
+        # Serialize the results
+        serialized = f"Loaded user's personal details and seen movies for user ID: {user_id}."
+
+        # Return content and artifact
+        return serialized, seen_movies
+
+    return tool_func
+
+
+
+# TODO: da sistemare e adattare al resto, vedi sopra altri tool.
 def save_report_tool():
     """
     Creates a tool function to handle saving user-reported issues.
