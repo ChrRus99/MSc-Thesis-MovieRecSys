@@ -1,3 +1,5 @@
+
+from functools import wraps
 from typing import Any, Annotated, Optional, Dict, List
 
 from langchain_core.runnables import RunnableConfig
@@ -6,6 +8,39 @@ from main_graph.state import AgentState
 
 
 ENABLE_DEBUG_LOGS = True
+
+
+def generic_log(
+    function_name: str, 
+    messages: List[str] = None,
+    fields: Dict[str, Any] = None, 
+    modality: str = "normal"
+) -> None:
+    if ENABLE_DEBUG_LOGS:
+        modality_prefix = "ERROR" if modality == "error" else "DEBUG"
+
+        print()
+        print("========================================================================================")
+        print(f"Modality: {modality_prefix}")
+        print(f"LOG DETAILS in function: \"{function_name}\"")
+        print("========================================================================================")
+
+        # Print messages if provided
+        if messages:
+            print("Prints:")
+            for message in messages:
+                print(f"\t{message}")
+            if fields:
+                print("----------------------------------------------------------------------------------------")
+
+        # Print fields if provided
+        if fields:
+            print("Fields:")
+            for key, value in fields.items():
+                print(f"\t{key}: {value}")
+
+        print("========================================================================================")
+        print("")
 
 
 def state_log(
@@ -20,7 +55,7 @@ def state_log(
         print()
         print("========================================================================================")
         print(f"Modality: {modality_prefix}")
-        print(f"STATE DETAILS in function: \"{function_name}\"")
+        print(f"STATE DETAILS in node function: \"{function_name}\"")
         print("========================================================================================")
         print("Message History:")
         for message in state.messages:
@@ -51,20 +86,20 @@ def state_log(
         print("")
 
 
-def generic_log(
+def tool_log(
     function_name: str, 
-    fields: Dict[str, Any] = None, 
     messages: List[str] = None,
+    fields: Dict[str, Any] = None,
     modality: str = "normal"
 ) -> None:
     if ENABLE_DEBUG_LOGS:
         modality_prefix = "ERROR" if modality == "error" else "DEBUG"
 
         print()
-        print("========================================================================================")
+        print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
         print(f"Modality: {modality_prefix}")
-        print(f"LOG DETAILS in function: \"{function_name}\"")
-        print("========================================================================================")
+        print(f"CALLED TOOL function: \"{function_name}\"")
+        print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
 
         # Print messages if provided
         if messages:
@@ -80,13 +115,11 @@ def generic_log(
             for key, value in fields.items():
                 print(f"\t{key}: {value}")
 
-        print("========================================================================================")
+        print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
         print("")
 
 
-from functools import wraps
-
-def log_state_after_return(func):
+def log_node_state_after_return(func):
     @wraps(func)
     async def wrapper(state: AgentState, *, config: RunnableConfig):
         # Call the function and get the result

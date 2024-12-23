@@ -9,10 +9,7 @@ from shared.utils import (
     load_user_info,
     load_user_seen_movies
 )
-from shared.debug_utils import (
-    state_log,
-    generic_log
-)
+from shared.debug_utils import tool_log
 
 
 def check_user_registration_tool(state: AgentState):
@@ -41,7 +38,7 @@ def check_user_registration_tool(state: AgentState):
         user_id = state.user_id
 
         # DEBUG LOG
-        generic_log(
+        tool_log(
             function_name="check_user_registration_tool", 
             messages= [
                 "Called Tool: [check_user_registration_tool]",
@@ -98,7 +95,7 @@ def register_user_tool(state: AgentState):
         user_id = state.user_id
 
         # DEBUG LOG
-        generic_log(
+        tool_log(
             function_name="register_user_tool", 
             messages= [
                 "Called Tool: [register_user_tool]",
@@ -163,7 +160,7 @@ def load_user_data_tool(state: AgentState):
         user_id = state.user_id
 
         # DEBUG LOG
-        generic_log(
+        tool_log(
             function_name="load_user_data_tool",
             messages=[
                 "Called Tool: [load_user_data_tool]",
@@ -181,7 +178,7 @@ def load_user_data_tool(state: AgentState):
         state.seen_movies.extend(seen_movies)  # Update the state
 
         # Serialize the results
-        serialized = f"Loaded user's personal details and seen movies for user ID: {user_id}."
+        serialized = f"User {user_id} personal details and seen movies have been successfully loaded."
 
         # Return content and artifact
         return serialized, seen_movies
@@ -213,7 +210,7 @@ def save_report_tool():
             tuple: A success message and an artifact with the report data.
         """
         # DEBUG LOG
-        generic_log(
+        tool_log(
             function_name="save_report_tool", 
             messages= [
                 "Called Tool: [save_report_tool]",

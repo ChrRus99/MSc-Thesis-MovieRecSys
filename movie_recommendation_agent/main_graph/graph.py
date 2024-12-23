@@ -10,7 +10,7 @@ from typing import Any, Annotated, Literal, TypedDict, cast
 
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import tool, StructuredTool
+from langchain_core.tools import tool, StructuredTool, ToolException
 from langchain_core.tools.base import InjectedToolCallId
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -31,53 +31,83 @@ from main_graph.tools import (
 from shared.utils import load_chat_model
 from shared.debug_utils import (
     state_log,
-    generic_log,
-    log_state_after_return,
+    tool_log,
+    log_node_state_after_return,
 )
 
 
 def make_handoff_tool(*, agent_name: str):
-    """Create a tool that can return handoff via a Command"""
+    """Create a tool that can return handoff via a Command."""
     tool_name = f"transfer_to_{agent_name}"
 
-    @tool(tool_name)
+    #@tool(tool_name)
     def handoff_to_agent(
-        state: Annotated[AgentState, InjectedState],
+        # optionally pass current graph state to the tool (will be ignored by the LLM)
+        state: Annotated[dict, InjectedState],
+        # optionally pass the current tool call ID (will be ignored by the LLM)
         tool_call_id: Annotated[str, InjectedToolCallId],
-    ) -> Command[Literal["sign_in"]]:
-        """Redirect to the sign-in agent."""
+    ):
+        """Redirect to another agent.
 
-        # Constructing the tool message
-        tool_message = ToolMessage(
-            content=f"Successfully transferred to {agent_name}",
-            role="tool",
-            name=tool_name,
-            tool_call_id=tool_call_id,
+        Args:
+            state: The current state of the agent.
+            tool_call_id: The ID of the tool call.
+
+        Returns:
+            Command: A command to transfer to another agent.
+        """
+        try:
+            # DEBUG LOG
+            tool_log(
+                function_name="handoff_to_agent: " + tool_name, 
+                fields={
+                    "tool_id": tool_call_id,
+                    "tool_name": tool_name,
+                    "transfer_to_agent": agent_name
+                }
+            )
+
+            # Create a ToolMessage to signal the handoff
+            tool_message = ToolMessage(
+                content=f"Successfully transferred to {agent_name}.",
+                name=tool_name,
+                tool_call_id=tool_call_id
+            )
+
+            # Ensure the state only includes one ToolMessage
+            filtered_messages = [msg for msg in state["messages"] if not isinstance(msg, ToolMessage)]
+            updated_messages = filtered_messages + [tool_message]
+
+            return Command(
+                # navigate to another agent node in the PARENT graph
+                goto=agent_name,
+                graph=Command.PARENT,
+                # This is the state update that the agent `agent_name` will see when it is invoked.
+                # We're passing agent's FULL internal message history AND adding a tool message to make sure
+                # the resulting chat history is valid.
+                update={"messages": updated_messages},
+            )
+        except ValueError as e:
+            # Catch ValueError and rethrow as ToolException
+            raise ToolException(f"An error occurred in the tool '{tool_name}': {str(e)}") from e
+
+    def _handle_error(error: ToolException) -> str:
+        return (
+            "The following errors occurred during tool execution:"
+            + error.args[0]
+            + "Please try again passing the correct parameters to the tool."
         )
 
-        generic_log(
-            function_name="handoff_to_agent: " + tool_name, 
-            fields={
-                "tool_id": tool_call_id,
-                "tool_name": tool_name,
-                "transfer_to_agent": agent_name
-            }
-        )
-
-        # Modifying state messages directly with tool message
-        state.messages.append(tool_message)  # Update the state
-
-        # Constructing the command with just the necessary attributes
-        return Command(
-            goto=agent_name,
-            graph=Command.PARENT,
-            update={"messages": state.messages}  # Ensure the update key is properly referencing the list
-        )
-    
-    return handoff_to_agent
+    # Wrap the tool using StructuredTool for better error handling
+    return StructuredTool.from_function(
+        func=handoff_to_agent,
+        name=f"transfer_to_{agent_name}",
+        description="A tool to redirect the user to another agent.",
+        handle_tool_error=_handle_error,
+    )
 
 
-@log_state_after_return
+@log_node_state_after_return
 async def human_node(
     state: AgentState, *, config: RunnableConfig
 ) -> Command[Literal["sign_up", "human"]]:
@@ -107,7 +137,7 @@ async def human_node(
 
 # TODO: da rifare tutti i prompt!!!
 
-@log_state_after_return
+@log_node_state_after_return
 async def greeting_and_route_query(
     state: AgentState, *, config: RunnableConfig
 ) -> Command[Literal["sign_up", "sign_in"]]:
@@ -141,22 +171,29 @@ async def greeting_and_route_query(
 
     # Step 2: Check user registration 
     call_check_user_registration_tool = check_user_registration_tool(state)
-    tool_message = await call_check_user_registration_tool.ainvoke(
+    tool_response = await call_check_user_registration_tool.ainvoke(
         {
             "name": "check_user_registration_tool",
             "args": {},
-            "id": "123",
+            "id": "1",
             "type": "tool_call"
         }
     )
-    is_user_registered = tool_message.artifact
+    
+    is_user_registered = tool_response.artifact
     # state.is_user_registered = is_user_registered
-    # state.messages.append(tool_message) # SBAGLIATO ---> devi creare ToolMessage non dict
+    
+    tool_message = ToolMessage(
+        content=tool_response.content,
+        role="tool",
+        tool_call_id=tool_response.tool_call_id,
+    )
+    #state.messages.append(tool_message)  # Update the state
 
     # Step 3: Generate routing with structured output
     routing_response = await model.with_structured_output(Router).ainvoke([
         SystemMessage(content="Analyze user registration status and provide routing."),
-        HumanMessage(content=f"User registered: {is_user_registered}")
+        HumanMessage(content=tool_response.content)
     ])
     # state.messages.append(AIMessage(content=routing_response.content))
     # state.router = routing_response
@@ -264,7 +301,7 @@ async def report_issue(
     # Load the agent's language model specified in the input config
 
 
-@log_state_after_return
+@log_node_state_after_return
 async def sign_up(
     state: AgentState, *, config: RunnableConfig
 ) -> Command[Literal["sign_in", "human"]]:
@@ -303,44 +340,41 @@ async def sign_up(
     #     state_modifier=(
     #         "You are a sign-up assistant. You will interact with the user to gather their first name, surname, and email address to register them for the service.\n"
     #         "Follow these steps:\n"
-    #         "1. Ask the user for their first name.\n"
-    #         "2. Once you have the first name, ask for their surname.\n"
-    #         "3. After getting the surname, ask for their email address.\n"
-    #         "4. When you have ALL three pieces of information (first name, surname, and email), use the `register_user_tool` with the collected information.\n"
-    #         "5. After the `register_user_tool` confirms successful registration, it will automatically transfer the user to the sign-in agent. There's no need to call the `transfer_to_sign_in` tool directly."
-    #     ),
-    # )
-
-    # sign_up_assistant = create_react_agent(
-    #     model,
-    #     sign_up_tools,
-    #     state_modifier=(
-    #         "Call and redirect to the `sign_in` agent."
+    #         "1. Ask the user for their first name, surname, and email.\n"
+    #         "2. If the user does not provide all the data, ask again to provide the missing data, until the user provide all the data."
+    #         "3. Only when you have ALL three pieces of information (first name, surname, and email), use the `register_user_tool` with the collected information.\n"
+    #         "4. Only after you have the confirm of registration from the register_user_tool', you can transfer the user to the `sign_in` agent."
     #     ),
     # )
 
     sign_up_assistant = create_react_agent(
         model,
         sign_up_tools,
-        state_modifier=(
-            "You are a sign-up assistant. You will interact with the user to gather their first name, surname, and email address to register them for the service.\n"
-            "Follow these steps:\n"
-            "1. Ask the user for their first name, surname, and email.\n"
-            "2. If the user does not provide all the data, ask again to provide the missing data, until the user provide all the data."
-            "3. Only when you have ALL three pieces of information (first name, surname, and email), use the `register_user_tool` with the collected information.\n"
-            "4. Only after you have the confirm of registration from the register_user_tool', you can transfer the user to the `sign_in` agent."
+        state_modifier=("""
+            You are a sign-up assistant. You will interact with the user to gather their first name, surname, and email address to register them for the service.\n
+            Follow these steps:\n
+            1. Ask the user for their first name, surname, and email.\n
+            2. If the user does not provide all the data, ask again to provide the missing data, until the user provide all the data.
+            3. Only when you have ALL three pieces of information (first name, surname, and email), use the `register_user_tool` with the collected information.\n
+            4. Only after you have the confirm of registration from the register_user_tool, you can transfer the user to the `sign_in` agent.
+            You MUST include human-readable response before transferring to another agent.
+
+            Example:
+                AIMessage: To get you registered for the service, could you please provide your name, surname and email address?
+                HumanMessage: My name is Jhon, my surname is Black, my email address is jhon.black@gmail.com
+                AIMessage: I'm registering you.
+                Tool Call: `register_user_tool`
+                AIMessage: Ok you have been successfully registered, now I will redirect you to the sign in process."
+                Tool Call: `transfer_to_sign_in`
+            """
         ),
     )
-
 
     response = None
 
     # Generate the response using the model with tools
     try:
-
         response = sign_up_assistant.invoke(state)
-        
-        print("------------> ", response)
 
         # Extract the last message
         response_messages = response['messages']
@@ -358,17 +392,17 @@ async def sign_up(
             modality="error"
         )
 
-        # raise e
+        raise e
 
         # FORZA TRASFERIMENTO (soluzione temporanea da sistemare)
         ############################################################
         state.messages.append(SystemMessage(content=f"Error: {e}"))  # Update the state
-        return Command(
-            update={
-                "messages": state.messages,
-                "user_data": state.user_data
-            }, 
-            goto="sign_in")
+        # return Command(
+        #     update={
+        #         "messages": state.messages,
+        #         "user_data": state.user_data
+        #     }, 
+        #     goto="sign_in")
         ############################################################
         
 
@@ -380,10 +414,8 @@ async def sign_up(
         goto="human"
     )
 
-    #return Command(update=response, goto="human")
 
-
-@log_state_after_return
+@log_node_state_after_return
 async def sign_in(
     state: AgentState, *, config: RunnableConfig
 ) -> Command:#[Literal["recommendation"]]:
@@ -407,20 +439,28 @@ async def sign_in(
 
     # Step 2: Load user's data (seen movies)
     call_load_user_data_tool = load_user_data_tool(state)
-    tool_message = await call_load_user_data_tool.ainvoke(
+    tool_response = await call_load_user_data_tool.ainvoke(
         {
             "name": "load_user_data_tool",
             "args": {},
-            "id": "123",
+            "id": "1",
             "type": "tool_call"
         }
     )
-    seen_movies = tool_message.artifact
+
+    seen_movies = tool_response.artifact
+
+    tool_message = ToolMessage(
+        content=tool_response.content,
+        role="tool",
+        tool_call_id=tool_response.tool_call_id,
+    )
+    #state.messages.append(tool_message)  # Update the state
 
     # Step 3: 
     notification_response = await model.ainvoke([
         SystemMessage(content="Notify the user about the user data loading result."),
-        HumanMessage(content=f"Data loading state: {tool_message.content}")
+        HumanMessage(content=f"Data loading state: {tool_response.content}")
     ])
     state.messages.append(AIMessage(content=notification_response.content))  # Update the state
 
@@ -441,7 +481,7 @@ async def sign_in(
 # TODO DA SISTEMARE MEGLIO recommendation -> vedi conduct_research in rag_agent, ma è un pò diverso!
 # TODO deve ritornare movies anzichè documenti ---> vedi se conviene creare dati strutturati
 
-@log_state_after_return
+@log_node_state_after_return
 async def recommendation(
     state: AgentState, *, config: RunnableConfig
 ) -> Command:
@@ -465,7 +505,10 @@ async def recommendation(
 
     ################################ <<<<<<<<<<<<<<<<<<<<<<<<<<---------------------------------------------- DA QUI <<<<<--------
     # DA FARE ALLA FINE:
-    # TODO: sistema problema due chiamate tools in sign_up
+    # DONE: sistema problema due chiamate tools in sign_up
+
+    # TODO: in greeting e in sign_in usare react_agent per chiamare tools, altrimenti non è poi possibile
+    # salvare i ToolMessage's in state.messages
 
     # TODO: fai roadmap links langraph --> vedi tutti link nel codice, salvati su whts app, su chrome, cronologia ultime 2 settimane, ecc. 
 
