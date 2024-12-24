@@ -6,6 +6,8 @@ user queries, handling the sign-up, the sing-in, and the issues report of the us
 personalized movies recommendations to the user.
 """
 
+import copy
+from operator import attrgetter
 from typing import Any, Annotated, Literal, TypedDict, cast
 
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage, ToolMessage
@@ -36,21 +38,24 @@ from shared.debug_utils import (
 )
 
 
-def make_handoff_tool(*, agent_name: str):
+# My comment: I decided to pass state directly through make_handoff_tool function
+# because if i pass state through handoff_to_agent, the state is passed indirectly by the model
+# and the in the state passed by the model the messages are present correctly, while the other 
+# fields of the state are resetted (which is strange). 
+def make_handoff_tool(state: AgentState, *, agent_name: str):
     """Create a tool that can return handoff via a Command."""
     tool_name = f"transfer_to_{agent_name}"
 
     #@tool(tool_name)
     def handoff_to_agent(
         # optionally pass current graph state to the tool (will be ignored by the LLM)
-        state: Annotated[dict, InjectedState],
+        #state: Annotated[AgentState, InjectedState],   # state: The current state of the agent.
         # optionally pass the current tool call ID (will be ignored by the LLM)
         tool_call_id: Annotated[str, InjectedToolCallId],
     ):
         """Redirect to another agent.
 
         Args:
-            state: The current state of the agent.
             tool_call_id: The ID of the tool call.
 
         Returns:
@@ -74,18 +79,15 @@ def make_handoff_tool(*, agent_name: str):
                 tool_call_id=tool_call_id
             )
 
-            # Ensure the state only includes one ToolMessage
-            filtered_messages = [msg for msg in state["messages"] if not isinstance(msg, ToolMessage)]
-            updated_messages = filtered_messages + [tool_message]
+            # Create a copy of the state and override the messages field
+            updated_state = vars(state).copy()  # Copy all fields dynamically
+            updated_state['messages'] = [tool_message]  # Override the messages field
 
             return Command(
                 # navigate to another agent node in the PARENT graph
                 goto=agent_name,
                 graph=Command.PARENT,
-                # This is the state update that the agent `agent_name` will see when it is invoked.
-                # We're passing agent's FULL internal message history AND adding a tool message to make sure
-                # the resulting chat history is valid.
-                update={"messages": updated_messages},
+                update=updated_state,
             )
         except ValueError as e:
             # Catch ValueError and rethrow as ToolException
@@ -170,30 +172,21 @@ async def greeting_and_route_query(
     state.messages.append(AIMessage(content=greeting_response.content))  # Update the state
 
     # Step 2: Check user registration 
-    call_check_user_registration_tool = check_user_registration_tool(state)
-    tool_response = await call_check_user_registration_tool.ainvoke(
-        {
-            "name": "check_user_registration_tool",
-            "args": {},
-            "id": "1",
-            "type": "tool_call"
-        }
-    )
+    tools = [check_user_registration_tool(state)]
+    model_with_tools = model.bind_tools(tools)
     
-    is_user_registered = tool_response.artifact
-    # state.is_user_registered = is_user_registered
+    chain = model_with_tools | attrgetter("tool_calls") | check_user_registration_tool(state).map()
+
+    tool_messages = await chain.ainvoke("call the tool")
+    tool_message = tool_messages[0]
+    state.messages.append(tool_message)  # Update the state
     
-    tool_message = ToolMessage(
-        content=tool_response.content,
-        role="tool",
-        tool_call_id=tool_response.tool_call_id,
-    )
-    #state.messages.append(tool_message)  # Update the state
+    #is_user_registered = tool_message.artifact
 
     # Step 3: Generate routing with structured output
     routing_response = await model.with_structured_output(Router).ainvoke([
         SystemMessage(content="Analyze user registration status and provide routing."),
-        HumanMessage(content=tool_response.content)
+        HumanMessage(content=tool_message.content)
     ])
     # state.messages.append(AIMessage(content=routing_response.content))
     # state.router = routing_response
@@ -330,8 +323,7 @@ async def sign_up(
 
     sign_up_tools = [
         register_user_tool(state),
-        make_handoff_tool(agent_name="sign_in"),
-        
+        make_handoff_tool(state, agent_name="sign_in"),
     ]
 
     # sign_up_assistant = create_react_agent(
@@ -370,19 +362,25 @@ async def sign_up(
         ),
     )
 
-    response = None
-
     # Generate the response using the model with tools
     try:
-        response = sign_up_assistant.invoke(state)
+        # Extract the last message from the response in the history of messages
+        state_messages = state.messages
+        last_state_message = state_messages[-1]
 
-        # Extract the last message
+        # Pass the model just the last message in the history of messages
+        temp_state = copy.deepcopy(state)
+        temp_state.messages = [last_state_message]
+
+        response = sign_up_assistant.invoke(temp_state)
+
+        # Extract and store the last message from the response
         response_messages = response['messages']
-        last_message = response_messages[-1]
-
-        state.messages.append(AIMessage(content=last_message.content))  # Update the state
+        last_response_message = response_messages[-1]
+        state.messages.append(last_response_message)  # Update the state
     except Exception as e:
-        #state.messages.append(AIMessage(content=response))
+        #state.messages.append(SystemMessage(content=f"Error: {e}"))  # Update the state
+        state.messages.append(SystemMessage(content=f"Error"))  # Update the state
 
         # ERROR LOG
         state_log(
@@ -396,7 +394,6 @@ async def sign_up(
 
         # FORZA TRASFERIMENTO (soluzione temporanea da sistemare)
         ############################################################
-        state.messages.append(SystemMessage(content=f"Error: {e}"))  # Update the state
         # return Command(
         #     update={
         #         "messages": state.messages,
@@ -404,11 +401,11 @@ async def sign_up(
         #     }, 
         #     goto="sign_in")
         ############################################################
-        
-
+    
     return Command(
         update={
             "messages": state.messages,
+            "is_user_registered": state.is_user_registered,
             "user_data": state.user_data
         },
         goto="human"
@@ -429,42 +426,33 @@ async def sign_in(
     # Combine the system prompt with the current conversation history
     #messages = [SystemMessage(content=system_prompt)] + state.messages
     
-
     # Step 1: Generate the response using the model
     model_response = await model.ainvoke([
         SystemMessage(content=system_prompt),
         HumanMessage(content="Confirm the user that is signed in.")
     ])
     state.messages.append(AIMessage(content=model_response.content))  # Update the state
-
+    
     # Step 2: Load user's data (seen movies)
-    call_load_user_data_tool = load_user_data_tool(state)
-    tool_response = await call_load_user_data_tool.ainvoke(
-        {
-            "name": "load_user_data_tool",
-            "args": {},
-            "id": "1",
-            "type": "tool_call"
-        }
-    )
+    tools = [load_user_data_tool(state)]
+    model_with_tools = model.bind_tools(tools)
 
-    seen_movies = tool_response.artifact
+    chain = model_with_tools | attrgetter("tool_calls") | load_user_data_tool(state).map()
 
-    tool_message = ToolMessage(
-        content=tool_response.content,
-        role="tool",
-        tool_call_id=tool_response.tool_call_id,
-    )
-    #state.messages.append(tool_message)  # Update the state
+    tool_messages = await chain.ainvoke("call the tool")
+    tool_message = tool_messages[0]
+    state.messages.append(tool_message)  # Update the state
 
     # Step 3: 
     notification_response = await model.ainvoke([
         SystemMessage(content="Notify the user about the user data loading result."),
-        HumanMessage(content=f"Data loading state: {tool_response.content}")
+        HumanMessage(content=f"Data loading state: {tool_message.content}")
     ])
     state.messages.append(AIMessage(content=notification_response.content))  # Update the state
 
-    # # Return a message containing the model response
+    #seen_movies = tool_message.artifact
+
+    # Return a message containing the model response
     return Command(
         update={
             "messages": state.messages,

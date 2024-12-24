@@ -1,5 +1,6 @@
 from typing import Annotated, Dict, Tuple, List
 
+from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_core.tools import tool, ToolException
 
 from main_graph.state import AgentState, UserData, Movie
@@ -42,7 +43,7 @@ def check_user_registration_tool(state: AgentState):
             function_name="check_user_registration_tool", 
             messages= [
                 "Called Tool: [check_user_registration_tool]",
-                f"Checking registration status for user:  {user_id}"
+                f"Checking registration status for user ID: {user_id}"
             ]
         )
 
@@ -51,7 +52,7 @@ def check_user_registration_tool(state: AgentState):
         state.is_user_registered = is_registered  # Update the state
 
         # Serialize the results
-        serialized = f"User {'is' if is_registered else 'is not'} registered."
+        serialized = f"User {user_id} {'is' if is_registered else 'is not'} registered."
         
         # Return content and artifacts
         return serialized, is_registered
@@ -124,6 +125,15 @@ def register_user_tool(state: AgentState):
         # Serialize the results
         serialized = f"User {user_id} has been successfully registered."
         
+        # Create the ToolMessage for confirmation
+        tool_message = ToolMessage(
+            content=serialized,
+            name="register_user_tool",
+            tool_call_id="call_user_registration"
+        )
+
+        state.messages.append(tool_message)  # Update the state
+
         # Return content and artifact
         return serialized, user_metadata
 
@@ -144,7 +154,7 @@ def load_user_data_tool(state: AgentState):
                   with user data as a list of dictionaries.
     """
     @tool(parse_docstring=True, response_format="content_and_artifact")
-    def tool_func() -> Tuple[str, List[Dict[str, str]]]:
+    def tool_func() -> Tuple[str, List[Dict]]:
         """ A tool that loads user seen movies.
         
         Args:

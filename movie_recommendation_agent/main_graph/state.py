@@ -54,18 +54,19 @@ class Router(TypedDict):
 
     logic: str
     """A string field that represents the reasoning or intent behind the routing decision."""
-
     type: Literal["greeting_and_route_query", "sign_up", "sign_in", "report_issue"]
     """A string literal field that specifies the classification type."""
 
 
 class UserData(TypedDict):  # total=False makes fields optional
+    """User data structure."""
     first_name: str
     last_name: str
     email: str
 
 
 class Movie(TypedDict):
+    """Movie data structure."""
     movie_id: int
     rating: float
     timestamp: int
@@ -82,11 +83,15 @@ class AgentState(InputState):
 
     # User's personal details
     user_id: Optional[str] = None
+    """The user's unique identifier."""
     is_user_registered: Optional[bool] = None
+    """A flag indicating whether the user is registered in the system."""
     user_data: UserData = field(default_factory=dict)
+    """The user's personal data."""
 
     # User's seen movies
     seen_movies: List[Movie] = field(default_factory=list)
+    """The list of movies the user has seen."""
 
     # TODO cambia tipo dato passato nella lista, crea tipo ad-hoc in shared/utils
     #documents: Annotated[list[Document], reduce_docs] = field(default_factory=list)
