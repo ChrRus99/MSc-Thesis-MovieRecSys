@@ -11,7 +11,7 @@ USERS_REGISTER_CSV_FILE_PATH = os.path.abspath("users_register.csv")
 RATINGS_CSV_FILE_PATH  = os.path.abspath("users_movie_ratings.csv")
 
 
-def is_user_registered(user_id: str):
+def is_user_registered(user_id: str) -> bool:
     """Check if a user is already registered.
 
     Args:
@@ -40,7 +40,7 @@ def is_user_registered(user_id: str):
     return False
 
 
-def save_user_info(user_data: dict):
+def save_user_info(user_data: dict) -> None:
     """Save user information to a CSV file.
 
     Args:
@@ -65,7 +65,7 @@ def save_user_info(user_data: dict):
         ])
 
 
-def load_user_info(user_id: str) -> Optional[dict]:
+def load_user_info(user_id: str) -> Optional[Dict]:
     """Load user information from a CSV file.
 
     Args:
@@ -97,7 +97,7 @@ def load_user_info(user_id: str) -> Optional[dict]:
     return None  # Return None if no match is found
 
 
-def save_user_seen_movies(user_id: str, movies: List[Dict]):
+def save_user_seen_movies(user_id: str, movies: List[Dict]) -> None:
     """Save user seen movies information to a CSV file.
     
     This function saves user seen movies information to a CSV file, overwriting if the combination 
@@ -122,7 +122,6 @@ def save_user_seen_movies(user_id: str, movies: List[Dict]):
         rows = list(reader)    # Read the rest of the file into memory
 
     # Prepare new data to write
-    new_rows = []
     for movie in movies:
         found = False
         for i, row in enumerate(rows):
@@ -140,18 +139,19 @@ def save_user_seen_movies(user_id: str, movies: List[Dict]):
 
         if not found:
             # If the entry doesn't exist, add it as a new row
-            new_rows.append([
+            rows.append([
                 user_id,
                 movie["movie_id"],
                 movie["rating"],
                 int(datetime.now().timestamp())
             ])
 
-    # Write all data back to the file, improving efficiency
+    # Write all data back to the file
     with open(RATINGS_CSV_FILE_PATH, mode='w', newline='') as file:
         writer = csv.writer(file)
         writer.writerow(["user_id", "movie_id", "rating", "timestamp"])
-        writer.writerows(rows + new_rows)
+        writer.writerows(rows)
+
 
 def load_user_seen_movies(user_id: str) -> List[Dict[str, str]]:
     """Load movies seen by a specific user from a CSV file.

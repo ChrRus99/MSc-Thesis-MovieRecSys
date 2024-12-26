@@ -28,6 +28,7 @@ from main_graph.tools import (
     check_user_registration_tool,
     register_user_tool,
     load_user_data_tool,
+    save_user_seen_movies_tool,
     save_report_tool,
 )
 from shared.utils import load_chat_model
@@ -112,7 +113,7 @@ def make_handoff_tool(state: AgentState, *, agent_name: str):
 @log_node_state_after_return
 async def human_node(
     state: AgentState, *, config: RunnableConfig
-) -> Command[Literal["sign_up", "human"]]:
+) -> Command[Literal["sign_up", "ask_user_preferences", "human"]]:
     """A node for collecting user input."""
     user_input = interrupt(value="Ready for user input.")
 
@@ -372,7 +373,7 @@ async def sign_up(
         temp_state = copy.deepcopy(state)
         temp_state.messages = [last_state_message]
 
-        response = sign_up_assistant.invoke(temp_state)
+        response = await sign_up_assistant.ainvoke(temp_state)
 
         # Extract and store the last message from the response
         response_messages = response['messages']
@@ -415,7 +416,7 @@ async def sign_up(
 @log_node_state_after_return
 async def sign_in(
     state: AgentState, *, config: RunnableConfig
-) -> Command:#[Literal["recommendation"]]:
+) -> Command[Literal["recommendation", "ask_user_preferences"]]:
     # Load the agent's language model and the formatted system prompt specified in the input config
     configuration = AgentConfiguration.from_runnable_config(config)
     model = load_chat_model(configuration.query_model)
@@ -458,11 +459,103 @@ async def sign_in(
             "messages": state.messages,
             "seen_movies": state.seen_movies
         },
-        #goto="recommendation"
+        goto="recommendation" if state.seen_movies else "ask_user_preferences"
     )
 
     # Load user preferences and other data
     # Do not generate any message, just load user preferences in state
+
+
+@log_node_state_after_return
+async def ask_user_preferences(
+    state: AgentState, *, config: RunnableConfig
+) -> Command[Literal["recommendation", "human"]]:
+    """
+    Collects user preferences for movies and transitions to the next node in the graph.
+    """
+    # Load the agent's language model and configuration
+    configuration = AgentConfiguration.from_runnable_config(config)
+    model = load_chat_model(configuration.query_model)
+    # system_prompt = configuration.sign_up_system_prompt.format(
+    #     logic=state.router["logic"]
+    # )
+
+    # Combine the system prompt with the current conversation history
+    #messages = [SystemMessage(content=system_prompt)] + state.messages
+
+
+    # Retrieve the user id and the thread id from the input config
+    user_id = config["configurable"]["user_id"]
+
+    user_preferences_tools = [
+        save_user_seen_movies_tool(state),
+        make_handoff_tool(state, agent_name="recommendation"),
+    ]
+
+    # Create the user preferences assistant
+    user_preferences_assistant = create_react_agent(
+        model,
+        user_preferences_tools,
+        state_modifier=(
+            """
+            You are a preferences assistant. Your job is to ask the user about the movies they have seen and their ratings.
+            Follow these steps:
+            1. Ask the user for the names and ratings of movies they have seen.
+            2. Save the movies using the `save_user_seen_movies_tool` tool once you have the data.
+            3. If the user has no more movies to provide, confirm their preferences are saved.
+            4. Transition to the `recommendation` agent using the `transfer_to_recommendation` tool.
+            5. Always respond in a human-readable way before transitioning.
+
+            Example conversation:
+                AIMessage: In order to provide you a movie recommendation based on your preferences in terms of movies I need some additional information.
+                AIMessage: Can you tell me the names of some movies you've seen and your personal ratings for them (on a scale from 1 to 5)?
+                HumanMessage: I've seen Inception, I rate it 5 stars, Interstellar, I rate it 4 stars, and Titanic, I rate it 3.5 stars.
+                Tool Call: `save_user_seen_movies_tool`
+                AIMessage: Thank you. I feel now I can provide you a better recommendation.
+                AIMessage: Did you have seen any other movie? Otherwise we can proceed with the recommendation.
+                HumanMessage: Actually I did. I've seen also Jumanji, I rate it 4 stars, and Toy Story, I rate it 2 stars. That's it.
+                AIMessage: Thank you! I’ve saved your preferences. Now let's move on to recommendations.
+                Tool Call: `transfer_to_recommendation`
+            """
+        ),
+    )
+
+    # Generate the response using the model with tools
+    try:
+        # Extract the last message from the response in the history of messages
+        state_messages = state.messages
+        last_state_message = state_messages[-1]
+
+        # Pass the model just the last message in the history of messages
+        temp_state = copy.deepcopy(state)
+        temp_state.messages = [last_state_message]
+
+        response = await user_preferences_assistant.ainvoke(temp_state)
+
+        # Extract and store the last message from the response
+        response_messages = response["messages"]
+        last_response_message = response_messages[-1]
+        state.messages.append(last_response_message)  # Update the state
+    except Exception as e:
+        state.messages.append(SystemMessage(content=f"Error"))  # Update the state
+
+        # ERROR LOG
+        state_log(
+            function_name="ask_user_preferences", 
+            state=state,
+            additional_fields={"Error": str(e)},
+            modality="error"
+        )
+
+        raise e
+
+    return Command(
+        update={
+            "messages": state.messages,
+            "seen_movies": state.seen_movies
+        },
+        goto="human"
+    )
 
 
 # DA QUI <<<<<<<<------------
@@ -491,41 +584,7 @@ async def recommendation(
     """
 
 
-    ################################ <<<<<<<<<<<<<<<<<<<<<<<<<<---------------------------------------------- DA QUI <<<<<--------
-    # DA FARE ALLA FINE:
-    # DONE: sistema problema due chiamate tools in sign_up
-
-    # TODO: in greeting e in sign_in usare react_agent per chiamare tools, altrimenti non è poi possibile
-    # salvare i ToolMessage's in state.messages
-
-    # TODO: fai roadmap links langraph --> vedi tutti link nel codice, salvati su whts app, su chrome, cronologia ultime 2 settimane, ecc. 
-
-    # TODO: alla fine l'idea è di sostituire tutti i CSV con dei database SQL!
-
-    # DA FARE ORA:
-    # TODO: gestire il fatto che utente non ha visto altri film, andando a chiedere film visti in recommendation node
-    # in questo modo risolviamo problema cold start problem prima di chiamare agent/grafo rag
-
-    # TODO: aggiungere human in the loop qui per prendere dati su film visti da utente.
     
-    # TODO: dopo sistema tutta la parte rag e recommendation graph per usare i dati movie lens e per usare filtri che ho creato in CRM
-    
-    # TODO: per la parte rag la rete va addestrata prima [offline] su 1000 e passa utenti che ho già nel dataframe "ratings", dopo
-    # prima di fare la raccommandazione all utente corrente prendo la decina di film che gli piacciono
-    # e riaddestro la rete preaddestrata [online], Dopodichè posso usare la rete per fare racommandation 
-    # (questo risolve cold-start problem) 
-    
-    # TODO: crea rete separata per simulare il fatto che l'utente vede dei film e gli salva nel file CSV (simula un app)
-    
-    # TODO: crea rete separata per fare l'addestramento offline e ottenere la rete preaddestrata da usare.
-    # ----> questo simula funzionamento data warehouse
-    # si potrebbe anche creare una funzione che runna su server (stile lambda in cloud) che a un ora fissa riaddestra la rete
-    # [offline] su tutti i dati raccolti durante la giornata. 
-
-    # TODO: si può anche salvare la rete addestrata online per ogni utente in un dataset (e.g., salvi reti in una directory e ti salvi
-    # il nome univoco della rete nel CSV user_register o in un altro CSV a parte)
-    # meglio in un CSV a parte e.g., user_id, online_model_id
-    ################################ <<<<<<<<<<<<<<<<<<<<<<<<<<---------------------------------------------- DA QUI <<<<<--------
 
     # Invoke the rag_graph with...
     #result = await rag_graph.ainvoke({"question": state.steps[0]})
@@ -548,13 +607,14 @@ builder.add_node("greeting_and_route_query", greeting_and_route_query)
 #builder.add_node(report_issue)
 builder.add_node("sign_up", sign_up)
 builder.add_node("sign_in", sign_in)
+builder.add_node("ask_user_preferences", ask_user_preferences)
 builder.add_node("recommendation", recommendation)
 
 builder.add_edge(START, "greeting_and_route_query")
 #builder.add_conditional_edges("greeting_and_route_query", route_query)
 #builder.add_conditional_edges("sign_up", check_registration_data)
 #builder.add_edge("sign_in", END)
-builder.add_edge("sign_in", "recommendation")
+#builder.add_edge("sign_in", "recommendation")
 builder.add_edge("recommendation", END)
 
 # Compile into a graph object that you can invoke and deploy.

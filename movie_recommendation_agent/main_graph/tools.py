@@ -8,7 +8,8 @@ from shared.utils import (
     is_user_registered,
     save_user_info,
     load_user_info,
-    load_user_seen_movies
+    load_user_seen_movies,
+    save_user_seen_movies
 )
 from shared.debug_utils import tool_log
 
@@ -131,7 +132,6 @@ def register_user_tool(state: AgentState):
             name="register_user_tool",
             tool_call_id="call_user_registration"
         )
-
         state.messages.append(tool_message)  # Update the state
 
         # Return content and artifact
@@ -146,6 +146,7 @@ def load_user_data_tool(state: AgentState):
 
     This factory function generates a tool that loads the personal details and seen movies of a user,
     allowing the sign_in agent to load user's preferences.
+
     Args:
         state (AgentState): The current conversation state.
 
@@ -195,6 +196,76 @@ def load_user_data_tool(state: AgentState):
 
     return tool_func
 
+
+def save_user_seen_movies_tool(state: AgentState):
+    """
+    Creates a tool function to saves the movies seen by the user.
+
+    This factory function generates a tool that saves the movies seen by the user, thus allowing for 
+    a user-based recommendation from the recommendation agent.
+
+    Args:
+        state (AgentState): The current conversation state.
+
+    Returns:
+        Callable: A tool function that accepts user seen movies and returns a success message along 
+                  with user data as a list of dictionaries.
+    """
+    @tool(parse_docstring=True, response_format="content_and_artifact")
+    def tool_func(movies: List[Dict]) -> Tuple[str, List[Dict]]:
+        """ A tool that saves the movies seen by the user.
+        
+        Args:
+            movies: List of movies seen by the user, each represented as a dict with keys 
+                    "movie_name" and "rating".
+
+        Returns:
+            Tuple:
+                - str: A message indicating the movies seen by the user have been saved.
+                - list: A list of dictionaries containing the user's seen movies data.
+        """
+        # Extract user id from state
+        user_id = state.user_id
+
+        # DEBUG LOG
+        tool_log(
+            function_name="save_user_seen_movies_tool",
+            messages=[
+                "Called Tool: [save_user_seen_movies_tool]",
+                f"Saving user's seen movies for user ID: {user_id}"
+            ]
+        )
+
+        # Resolve movie_name to movie_id
+        def resolve_movie_name_to_id(movie_name: str) -> str:
+            """Simulate resolving movie_name to movie_id (placeholder for actual logic)."""
+            return f"movie_id_{hash(movie_name) % 1000}"
+
+        # Create a list of movies with keys "movie_id" and "rating"
+        seen_movies = [
+            {"movie_id": resolve_movie_name_to_id(movie["movie_name"]), "rating": movie["rating"]}
+            for movie in movies
+        ]
+
+        # Save user seen movies in the CSV file
+        save_user_seen_movies(user_id, seen_movies)
+        state.seen_movies.extend(seen_movies)  # Update the state
+
+        # Serialize the results
+        serialized = f"User {user_id} seen movies have been successfully saved."
+
+        # Create the ToolMessage for confirmation
+        tool_message = ToolMessage(
+            content=serialized,
+            name="save_user_seen_movies_tool",
+            tool_call_id="call_save_user_seen_movies_tool"
+        )
+        state.messages.append(tool_message)  # Update the state
+
+        # Return content and artifact
+        return serialized, seen_movies
+
+    return tool_func
 
 
 # TODO: da sistemare e adattare al resto, vedi sopra altri tool.
