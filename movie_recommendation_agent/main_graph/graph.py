@@ -583,9 +583,6 @@ async def recommendation(
         - Updates the state with the retrieved documents and removes the completed step.
     """
 
-
-    
-
     # Invoke the rag_graph with...
     #result = await rag_graph.ainvoke({"question": state.steps[0]})
 
