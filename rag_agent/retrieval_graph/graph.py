@@ -86,6 +86,10 @@ def make_handoff_tool(state: AgentState, *, agent_name: str):
         except ValueError as e:
             # Catch ValueError and rethrow as ToolException
             raise ToolException(f"An error occurred in the tool '{tool_name}': {str(e)}") from e
+        except Error as e:
+            # Catch Error and rethrow as ToolException
+            raise ToolException(f"An error occurred in the tool '{tool_name}': {str(e)}") from e
+
 
     def _handle_error(error: ToolException) -> str:
         return (
@@ -106,7 +110,7 @@ def make_handoff_tool(state: AgentState, *, agent_name: str):
 @log_node_state_after_return
 async def human_node(
     state: AgentState, *, config: RunnableConfig
-) -> Command[Literal["ask_user_for_more_info", "human"]]:
+) -> Command[Literal["ask_user_for_more_info", "user_validation", "human"]]:
     """A node for collecting user input."""
     user_input = interrupt(value="Ready for user input.")
 
@@ -341,7 +345,15 @@ async def respond_to_general_movie_question(
     response = await model.ainvoke(messages)
     state.messages.append(response)  # Update the state
 
-    return {"messages": [response]}
+    state.router = {
+        "type": "respond_to_general_movie_question", 
+        "logic": "Store this node which preeceeds the validation node. This allows eventual backpropagation in case in which the user does not validate the provided response."
+    }
+
+    return {
+        "messages": [response], 
+        "router": state.router
+    }
 
 # e.g., tell me more about this movie --> corrective rag
 
@@ -455,6 +467,119 @@ async def respond(
     # return {"messages": [response]}
 
 
+async def user_validation(
+    state: AgentState, *, config: RunnableConfig
+) -> Command[Literal["human", "analyze_and_route_query", END]]:
+    # Load the agent's language model specified in the input config
+    configuration = AgentConfiguration.from_runnable_config(config)
+    model = load_chat_model(configuration.query_model)
+
+    # Format the system prompt (using the router's logic) to request more information
+    # system_prompt = configuration.more_info_system_prompt.format(
+    #     logic=state.router["logic"]
+    # )
+    
+    # Combine the system prompt with the agent's conversation history
+    # messages = [{"role": "system", "content": system_prompt}] + state.messages
+
+    # Get the previous node from which this validation node was reached
+    previous_node = state.router["type"] 
+
+    validation_tools = [
+        make_handoff_tool(state, agent_name=previous_node),
+        make_handoff_tool(state, agent_name=END)
+    ]
+
+    validation_assistant = create_react_agent(
+        model,
+        validation_tools,
+        state_modifier=(f"""
+            You are a Movie Recommendation Assistant. Your job is to help users with their inquiries related to movies.
+
+            The agent `{previous_node}` has provided the user a response related to movies information or movie recommendation. 
+            Your job is to validate if the user is satisfied with the provided response and, in the case in which the user is not satisfied about the answer, you must redact a brief report about the user complaint and redirect the user to the previous agent `{previous_node}`.
+
+            Follow these steps:
+            1. If the user seems satisfied about the provided response so far, transfer the user to the `END` node.
+            2. Otherwise, if the user does not seem satisfied about the provided response so far, and the user complaints seems clear to you, then transfer the user back to the `{previous_node}` agent.
+            3. Otherwise, if the user complaint is not clear, ask the user to provide additional relevant information in order to understand its complaint.
+            4. In this way, at the next iterations, you will be able to redirect the user back to the `{previous_node}` agent and to provide the agent a report about the complaint.
+
+            Example 1:
+                HumanMessage: Thank you for the information.
+                Tool Call: `transfer_to_END`
+
+            Example 2:
+                HumanMessage: I asked you about the cast of Top Gun, but you provided me information about the movie plot instead.
+                Tool Call: `transfer_to_{previous_node}`
+
+            Example 3:
+                ...Message History...
+                AIMessage: The user is complaining about the fact that he asked for the year in which Titanic was released, but the agent provided information about the cast instead.
+                Tool Call: `transfer_to_{previous_node}`
+
+            Example 4:
+                HumanMessage: You recommendation sucks.
+                AIMessage: I'm sorry to hear that, can you provide me some additional information, in such a way to provide you a better recommendation?
+                HumanMessage: These movies are all too old, while I asked you for some recent action movie.
+                AIMessage: The user is complaining about the fact that he asked for a recommendation about some recent action movies, but the agent recommended old movies instead.
+
+            Example 5:
+                HumanMessage: This is not what i asked for.
+                AIMessage: I'm sorry to hear that, can you tell me what don't you like about the provided answer, in such a way to provide you a better answer?
+                HumanMessage: I never asked for the cast of the movie.
+                AIMessage: Can you tell me what did you asked for, maybe providing some additional detail?
+                HumanMessage: I asked you to briefly describe me the plot of the movie Top Gun. I don't want any other irrelevant information.
+                AIMessage: The user is complaining about the fact that he asked for a brief description about the plot of the movie Top Gun, but the agent provided some other irrelevant information instead.
+            
+            **IMPORTANT**: Transition directly to the agent without asking redundant questions if enough detail is already provided.
+        """
+        ),
+    )
+
+    try:
+        # Prepare state messages excluding ToolMessage instances
+        filtered_messages: list[BaseMessage] = [
+            msg for msg in state.messages if not isinstance(msg, ToolMessage)
+        ]
+
+        # Create a temporary state with filtered messages
+        temp_state = copy.deepcopy(state)
+        temp_state.messages = filtered_messages
+
+        # Generate response from the assistant
+        response = await validation_assistant.ainvoke(temp_state)
+
+        # Add the response to state messages
+        last_response_message = response["messages"][-1]
+        state.messages.append(last_response_message)  # Update the state
+    except Exception as e:
+        state.messages.append(SystemMessage(content="Error"))  # Update the state
+
+        # ERROR LOG
+        state_log(
+            function_name="ask_user_for_more_info", 
+            state=state,
+            additional_fields={"Error": e},
+            modality="error"
+        )
+
+        raise e
+
+    return Command(
+        update={
+            "messages": state.messages
+        },
+        goto="human"
+    )
+
+    pass
+# TODO in routing passa la logica validation con richiesta aggiornata
+# forse un idea migliore sarebbe quella di passare routing da nodo prima: respond_to_general_movie_question
+# oppure create_recommendation_research_plan e se validation fallisce fare un routing direttamente 
+# a nodo precedente, anzichè a analyze_and_route_query
+
+
 # Define the graph
 builder = StateGraph(AgentState, input=InputState, config_schema=AgentConfiguration)
 builder.add_node("human", human_node)
@@ -464,13 +589,15 @@ builder.add_node("respond_to_general_movie_question", respond_to_general_movie_q
 builder.add_node("create_recommendation_research_plan", create_recommendation_research_plan)
 builder.add_node("conduct_research", conduct_research)
 builder.add_node("respond", respond)
+builder.add_node("user_validation", user_validation)
 
 builder.add_edge(START, "analyze_and_route_query")
 # builder.add_edge("create_recommendation_research_plan", "conduct_research")
 # builder.add_conditional_edges("conduct_research", check_finished) # DA TOGLIERE ---> usa Command
-builder.add_edge("ask_user_for_more_info", END)
-builder.add_edge("respond_to_general_movie_question", END)
-builder.add_edge("respond", END)
+#builder.add_edge("ask_user_for_more_info", END)
+builder.add_edge("respond_to_general_movie_question", "user_validation")
+builder.add_edge("respond", "user_validation")
+#builder.add_edge("user_validation", END)
 
 # Compile into a graph object that you can invoke and deploy.
 graph = builder.compile()
