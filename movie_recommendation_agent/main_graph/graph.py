@@ -14,7 +14,6 @@ from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AI
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool, StructuredTool, ToolException
 from langchain_core.tools.base import InjectedToolCallId
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langchain.agents import Tool
 from langgraph.prebuilt import tools_condition, ToolNode
@@ -83,6 +82,7 @@ def make_handoff_tool(state: AgentState, *, agent_name: str):
             # Create a copy of the state and override the messages field
             updated_state = vars(state).copy()  # Copy all fields dynamically
             updated_state['messages'] = [tool_message]  # Override the messages field
+            #updated_state['messages'] = updated_state.get('messages', []) + [tool_message]
 
             return Command(
                 # navigate to another agent node in the PARENT graph
@@ -209,15 +209,7 @@ async def greeting_and_route_query(
         goto=routing_response['type']
     )
 
-# TODO: vedi se qua conviene usare Command per routing diretto senza usare conditional edges
-# vedi: https://www.youtube.com/watch?v=6BJDKf90L9A&ab_channel=LangChain
-
-# vedi anche questo https://langchain-ai.github.io/langgraph/how-tos/multi-agent-multi-turn-convo/
-
-# vedi anche questo https://langchain-ai.github.io/langgraph/concepts/human_in_the_loop/#multi-turn-conversation
-
-# vedi anche questo https://langchain-ai.github.io/langgraph/how-tos/agent-handoffs/#using-with-a-prebuilt-react-agent 
-
+# TODO: da implementare e integrare
 async def report_issue(
     state: AgentState, *, config: RunnableConfig
 ) -> dict[str, list[BaseMessage]]:

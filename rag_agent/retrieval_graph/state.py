@@ -59,8 +59,7 @@ class Router(TypedDict):
     logic: str
     """A string field that represents the reasoning or intent behind the routing decision."""
 
-    #type: Literal["more-info", "movie-recommendation", "general"]
-    type: Literal["more-info", "langchain", "general"]
+    type: Literal["create_recommendation_research_plan", "ask_user_for_more_info", "respond_to_general_movie_question"]
     """A string literal field that specifies the classification type."""
 
 

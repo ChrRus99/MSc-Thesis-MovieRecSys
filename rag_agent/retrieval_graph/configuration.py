@@ -46,27 +46,27 @@ class AgentConfiguration(BaseConfiguration):
     )
 
     general_system_prompt: str = field(
-        default=prompts.GENERAL_SYSTEM_PROMPT,
+        default=prompts.GENERAL_QUESTION_SYSTEM_PROMPT,
         metadata={
             "description": "The system prompt used for responding to general questions."
         },
     )
 
-    research_plan_system_prompt: str = field(
-        default=prompts.RESEARCH_PLAN_SYSTEM_PROMPT,
-        metadata={
-            "description": "The system prompt used for generating a research plan based on the user's question."
-        },
-    )
+    # research_plan_system_prompt: str = field(
+    #     default=prompts.RESEARCH_PLAN_SYSTEM_PROMPT,
+    #     metadata={
+    #         "description": "The system prompt used for generating a research plan based on the user's question."
+    #     },
+    # )
 
-    generate_queries_system_prompt: str = field(
-        default=prompts.GENERATE_QUERIES_SYSTEM_PROMPT,
-        metadata={
-            "description": "The system prompt used by the researcher to generate queries based on a step in the research plan."
-        },
-    )
+    # generate_queries_system_prompt: str = field(
+    #     default=prompts.GENERATE_QUERIES_SYSTEM_PROMPT,
+    #     metadata={
+    #         "description": "The system prompt used by the researcher to generate queries based on a step in the research plan."
+    #     },
+    # )
 
-    response_system_prompt: str = field(
-        default=prompts.RESPONSE_SYSTEM_PROMPT,
-        metadata={"description": "The system prompt used for generating responses."},
-    )
+    # response_system_prompt: str = field(
+    #     default=prompts.RESPONSE_SYSTEM_PROMPT,
+    #     metadata={"description": "The system prompt used for generating responses."},
+    # )

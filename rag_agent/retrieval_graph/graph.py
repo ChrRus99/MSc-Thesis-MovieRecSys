@@ -6,22 +6,135 @@ user queries, generating research plans to answer user questions, conducting res
 formulating responses.
 """
 
-from typing import Any, Literal, TypedDict, cast
+import copy
+from operator import attrgetter
+from typing import Any, Annotated, Literal, TypedDict, cast
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
-from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.tools import tool, StructuredTool, ToolException
+from langchain_core.tools.base import InjectedToolCallId
 from langgraph.graph import END, START, StateGraph
+from langchain.agents import Tool
+from langgraph.prebuilt import tools_condition, ToolNode
+from langgraph.prebuilt import InjectedState, create_react_agent
+from langgraph.types import Command, interrupt
 
 from retrieval_graph.configuration import AgentConfiguration
 from retrieval_graph.researcher_graph.graph import graph as researcher_graph
 from retrieval_graph.state import AgentState, InputState, Router
 from shared.utils import format_docs, load_chat_model
+from shared.debug_utils import (
+    state_log,
+    tool_log,
+    log_node_state_after_return,
+)
 
 
+# My comment: I decided to pass state directly through make_handoff_tool function
+# because if i pass state through handoff_to_agent, the state is passed indirectly by the model
+# and the in the state passed by the model the messages are present correctly, while the other 
+# fields of the state are resetted (which is strange). 
+def make_handoff_tool(state: AgentState, *, agent_name: str):
+    """Create a tool that can return handoff via a Command."""
+    tool_name = f"transfer_to_{agent_name}"
+
+    #@tool(tool_name)
+    def handoff_to_agent(
+        # optionally pass current graph state to the tool (will be ignored by the LLM)
+        #state: Annotated[AgentState, InjectedState],   # state: The current state of the agent.
+        # optionally pass the current tool call ID (will be ignored by the LLM)
+        tool_call_id: Annotated[str, InjectedToolCallId],
+    ):
+        """Redirect to another agent.
+
+        Args:
+            tool_call_id: The ID of the tool call.
+
+        Returns:
+            Command: A command to transfer to another agent.
+        """
+        try:
+            # DEBUG LOG
+            tool_log(
+                function_name="handoff_to_agent: " + tool_name, 
+                fields={
+                    "tool_id": tool_call_id,
+                    "tool_name": tool_name,
+                    "transfer_to_agent": agent_name
+                }
+            )
+
+            # Create a ToolMessage to signal the handoff
+            tool_message = ToolMessage(
+                content=f"Successfully transferred to {agent_name}.",
+                name=tool_name,
+                tool_call_id=tool_call_id
+            )
+
+            # Create a copy of the state and override the messages field
+            updated_state = vars(state).copy()  # Copy all fields dynamically
+            #updated_state['messages'] = [tool_message]  # Override the messages field ##################### DA SISTEMARE QUESTO PROBLEMA CHE SE DECOMMENTO LANCIA ERRORE BAD REQUEST
+
+
+            return Command(
+                # navigate to another agent node in the PARENT graph
+                goto=agent_name,
+                graph=Command.PARENT,
+                update=updated_state,
+            )
+        except ValueError as e:
+            # Catch ValueError and rethrow as ToolException
+            raise ToolException(f"An error occurred in the tool '{tool_name}': {str(e)}") from e
+
+    def _handle_error(error: ToolException) -> str:
+        return (
+            "The following errors occurred during tool execution:"
+            + error.args[0]
+            + "Please try again passing the correct parameters to the tool."
+        )
+
+    # Wrap the tool using StructuredTool for better error handling
+    return StructuredTool.from_function(
+        func=handoff_to_agent,
+        name=f"transfer_to_{agent_name}",
+        description="A tool to redirect the user to another agent.",
+        handle_tool_error=_handle_error,
+    )
+
+
+@log_node_state_after_return
+async def human_node(
+    state: AgentState, *, config: RunnableConfig
+) -> Command[Literal["ask_user_for_more_info", "human"]]:
+    """A node for collecting user input."""
+    user_input = interrupt(value="Ready for user input.")
+
+    # identify the last active agent
+    # (the last active node before returning to human)
+    langgraph_triggers = config["metadata"]["langgraph_triggers"]
+    if len(langgraph_triggers) != 1:
+        raise AssertionError("Expected exactly 1 trigger in human node")
+
+    active_agent = langgraph_triggers[0].split(":")[1]
+
+    return Command(
+        update={
+            "messages": [
+                {
+                    "role": "human",
+                    "content": user_input,
+                }
+            ]
+        },
+        goto=active_agent,
+    )
+
+
+@log_node_state_after_return
 async def analyze_and_route_query(
     state: AgentState, *, config: RunnableConfig
-) -> dict[str, Router]:
+) -> Command[Literal["create_recommendation_research_plan", "ask_user_for_more_info", "respond_to_general_movie_question"]]:
     """Analyze the user's query and determine the appropriate routing.
 
     This function uses a language model to classify the user's query and decide how to route it
@@ -32,9 +145,12 @@ async def analyze_and_route_query(
         config (RunnableConfig): Configuration with the model used for query analysis.
 
     Returns:
-        dict[str, Router]: A dictionary containing the 'router' key with the classification result 
-                           (classification type and logic).
+        Command: The routing command indicating the next step.
     """
+
+    # TODO: passare parametri: user_id, seen_movies, ecc. da recommendation node
+    # TODO: modifica lo stato e rinominalo per non fare casino con lo stato di main_graph
+
     # Load the agent's language model specified in the input config
     configuration = AgentConfiguration.from_runnable_config(config)
     model = load_chat_model(configuration.query_model)
@@ -42,97 +158,173 @@ async def analyze_and_route_query(
     # Format the system prompt to route the query
     system_prompt = configuration.router_system_prompt
 
+    print("======> ", state.messages)
+
     # Combine the system prompt with the agent's conversation history
     messages = [{"role": "system", "content": system_prompt}] + state.messages
 
     # Use the model to classify the query and ensure output matches the Router structure
-    response = cast(
+    routing_response = cast(
         Router, await model.with_structured_output(Router).ainvoke(messages)
     )
+    #state.router = routing_response  # Update the state
+    print("---------> ", routing_response)
+    print("---------> ", routing_response['type'])
 
-    # Return the classification result
-    return {"router": response}
+    # Return the structured routing result
+    return Command(
+        update={
+            "messages": state.messages,
+            #"router": state.router,
+            # "user_id": state.user_id, # TODO: DA PASSARE PARAMETRI DA recommendation node 
+            # "is_user_registered": state.is_user_registered
+        },
+        goto=routing_response['type']
+    )
 
+# TODO:
+# idea per integrare la parte di validation, sarebbe da:
+# 1 - parte con routing none
+# 2 - user question
+# 3 - routing
+# 4 - answer question (da uno dei 3 rami)
+# 5 - validation
+# 6 - Se validation user fallisce
+#       - riparti da routing precedentemente + passa tutta history of messages in rag_graph
+#       - Ripeti da step 3 con una user question sistemata with validation message (contente la risposta data in precedenza + cosa non andava/era sbagliato)
+#     Altrimenti l'utente ha apprezzato la risposta e si può:
+#       - chiudere la conversazione se l'utente non ha altre domande
+#       - oppure ripetere il recommendation cycle (con routing e messages resettati) se l'utente ha altre domande
 
-def route_query(
-    state: AgentState
-) -> Literal["create_research_plan", "ask_for_more_info", "respond_to_general_query"]:
-    """Determine the next step based on the query classification.
-
-    Args:
-        state (AgentState): The current state of the agent, including the router's classification.
-
-    Returns:
-        Literal["create_research_plan", "ask_for_more_info", "respond_to_general_query"]: 
-        The next step to take.
-
-    Raises:
-        ValueError: If an unknown router type is encountered.
-    """
-    # Retrieve the classification type from the router in the agent's state
-    _type = state.router["type"]
-
-    # Route based on the classification type
-    match _type:
-        #case "movie-recommendation":
-        case "langchain":
-            return "create_research_plan"
-        case "more-info":
-            return "ask_for_more_info"
-        case "general":
-            return "respond_to_general_query"
-        case _:
-            # Raise an error if the type is not recognized
-            raise ValueError(f"Unknown router type {_type}")
-
-
-async def ask_for_more_info(
+@log_node_state_after_return
+async def ask_user_for_more_info(
     state: AgentState, *, config: RunnableConfig
-) -> dict[str, list[BaseMessage]]:
-    """Generate a response asking the user for more information.
-
-    This node is called when the router determines that more information is needed from the user.
-
-    Args:
-        state (AgentState): The current state of the agent, including conversation history and 
-                            router logic.
-        config (RunnableConfig): Configuration with the model used to respond.
-
-    Returns:
-        dict[str, list[str]]: A dictionary with a 'messages' key containing the generated response.
-    """
+) -> Command[Literal["analyze_and_route_query", "human"]]:
     # Load the agent's language model specified in the input config
     configuration = AgentConfiguration.from_runnable_config(config)
     model = load_chat_model(configuration.query_model)
 
     # Format the system prompt (using the router's logic) to request more information
-    system_prompt = configuration.more_info_system_prompt.format(
-        logic=state.router["logic"]
-    )
+    # system_prompt = configuration.more_info_system_prompt.format(
+    #     logic=state.router["logic"]
+    # )
     
     # Combine the system prompt with the agent's conversation history
-    messages = [{"role": "system", "content": system_prompt}] + state.messages
+    # messages = [{"role": "system", "content": system_prompt}] + state.messages
 
-    # Return the generated response
-    response = await model.ainvoke(messages)   
-    return {"messages": [response]}
+    ask_more_info_tools = [
+        make_handoff_tool(state, agent_name="analyze_and_route_query"),
+    ]
+
+    # My comment: here an important note is that when we design the prompt we must take into account the human-in-the-loop mechanism
+    # namely, in the prompt we must always consider the fact that we must handle each iteraction of the model with the user
+    # in an independent way, so we must not work on the entire messages history, otherwise the prompt won't work as expected.
+    # This means that each example must show the model how to handle a scenario in each single iteraction with the user, and not how
+    # we expect the entire conversation history to be!
+    ask_more_info_assistant = create_react_agent(
+        model,
+        ask_more_info_tools,
+        state_modifier=("""
+            You are a Movie Recommendation Assistant. Your job is to help users with their inquiries related to movies.
+
+            Your boss has determined that the user is asking a generic question probably not related to movies, so any additional information is needed by the user before providing a movie recommendation or answering a query.
+
+            Follow these steps:
+            1. If the user question or request seems clear to you, namely it contains sufficient details to identify a specific movie or movie-related information need, directly transfer the user to the `analyze_and_route_query` agent.
+            2. Otherwise, if the user question or request does not seems clear to you, ask the user to provide additional relevant information.
+            3. Once the user provides any additional relevant information, reformulate the user’s request in a clear way.
+            4. In this way, at the next iterations, you will be able to transfer the user to the `analyze_and_route_query` agent.
+
+            Example 1:
+                HumanMessage: I want to watch a good recent action movie. What do you recommend?
+                Tool Call: `transfer_to_analyze_and_route_query`
+
+            Example 2:
+                ...Message History...
+                AIMessage: The user wants a recommendation for a good recent fantasy movie.
+                Tool Call: `transfer_to_analyze_and_route_query`
+
+            Example 3:
+                HumanMessage: I want to watch something fun.
+                AIMessage: In order to provide you the best possible recommendation based on your preferences I will need some additional information. Were you looking for an animation movie or a comic movie?
+                HumanMessage: I was thinking something like a comedy.
+                AIMessage: The user wants a recommendation for a comedy movie to watch.
+
+            Example 4:
+                HumanMessage: I want to watch a good movie.
+                AIMessage: Sure, what movie were you interested in?
+                HumanMessage: I don't know, I just want to watch a good movie.
+                AIMessage: In order to provide you the best possible recommendation based on your preferences I will need some additional information. Could you tell me what genre you are interested in?
+                HumanMessage: I was thinking something like an action movie.
+                AIMessage: The user wants a recommendation for an action movie to watch.
+
+            Example 5:
+                HumanMessage: I want information about a movie.
+                AIMessage: Sure, what movie were you interested in?
+                HumanMessage: I want to know which is the cast of Top Gun.
+                AIMessage: The user wants to know which is the cast of Top Gun.
+            
+            **IMPORTANT**: Transition directly to the agent without asking redundant questions if enough detail is already provided.
+        """
+        ),
+    )
+
+    try:
+        # Prepare state messages excluding ToolMessage instances
+        filtered_messages: list[BaseMessage] = [
+            msg for msg in state.messages if not isinstance(msg, ToolMessage)
+        ]
+
+        # Create a temporary state with filtered messages
+        temp_state = copy.deepcopy(state)
+        temp_state.messages = filtered_messages
+
+        # Generate response from the assistant
+        response = await ask_more_info_assistant.ainvoke(temp_state)
+
+        # Add the response to state messages
+        last_response_message = response["messages"][-1]
+        state.messages.append(last_response_message)  # Update the state
+    except Exception as e:
+        state.messages.append(SystemMessage(content="Error"))  # Update the state
+
+        # ERROR LOG
+        state_log(
+            function_name="ask_user_for_more_info", 
+            state=state,
+            additional_fields={"Error": e},
+            modality="error"
+        )
+
+        raise e
+
+    return Command(
+        update={
+            "messages": state.messages
+        },
+        goto="human"
+    )
 
 
-async def respond_to_general_query(
+# DA QUI <<<<<<<<<<<<<<---------------------------------------------------- TODO
+# TODO: <<<<<<<--------- qui bisogna aggiungere una logica per generare il nuovo HumanMessage
+# migliorato da ripassare al nodo "ask_user_for_more_info"
+# questo nodo va messo come ultimo messagio (HumanMessage) in output da questo nodo!!!
+# <<<<----------- chiedi a chatgpt se ha un idea su come fare questo.
+# NOTA: lo stesso meccanismo va poi implementato per validation
+
+# TODO: dopo continua a implementare logica disegnata su foglio per creare il grafo
+
+
+
+# TODO: aggiungere il tool implementato per rispondere alla domanda in base a dati in movies_df
+# TODO: dopo come improvement, sarebbe da creare un piano per pianificare la risposta come per create research plan
+# in modo da aggiungere parte di ricerca su internet per trovare più informazioni. ---> corrective_rag
+
+@log_node_state_after_return
+async def respond_to_general_movie_question(
     state: AgentState, *, config: RunnableConfig
 ) -> dict[str, list[BaseMessage]]:
-    """Generate a response to a general query.
-
-    This node is called when the router classifies the query as a general question.
-
-    Args:
-        state (AgentState): The current state of the agent, including conversation history and 
-                            router logic.
-        config (RunnableConfig): Configuration with the model used to respond.
-
-    Returns:
-        dict[str, list[str]]: A dictionary with a 'messages' key containing the generated response.
-    """
     # Load the agent's language model specified in the input config
     configuration = AgentConfiguration.from_runnable_config(config)
     model = load_chat_model(configuration.query_model)
@@ -147,43 +339,38 @@ async def respond_to_general_query(
 
     # Return the response to the general query
     response = await model.ainvoke(messages)
+    state.messages.append(response)  # Update the state
+
     return {"messages": [response]}
 
+# e.g., tell me more about this movie --> corrective rag
 
-async def create_research_plan(
+
+async def create_recommendation_research_plan(
     state: AgentState, *, config: RunnableConfig
 ) -> dict[str, list[str] | str]:
-    """Create a step-by-step research plan for answering a specific query.
-
-    Args:
-        state (AgentState): The current state of the agent, including conversation history.
-        config (RunnableConfig): Configuration with the model used to generate the plan.
-
-    Returns:
-        dict[str, list[str]]: A dictionary with a 'steps' key containing the list of research steps.
-    """
 
     class Plan(TypedDict):
         """Generate research plan."""
 
         steps: list[str]
         """A list of steps in the research plan."""
+    pass
+    # # Load the agent's language model specified in the input config and
+    # # configure it to produce structured output matching the Plan TypedDict
+    # configuration = AgentConfiguration.from_runnable_config(config)
+    # model = load_chat_model(configuration.query_model).with_structured_output(Plan)
 
-    # Load the agent's language model specified in the input config and
-    # configure it to produce structured output matching the Plan TypedDict
-    configuration = AgentConfiguration.from_runnable_config(config)
-    model = load_chat_model(configuration.query_model).with_structured_output(Plan)
+    # # Combine the system prompt with the agent's conversation history   
+    # messages = [
+    #     {"role": "system", "content": configuration.research_plan_system_prompt}
+    # ] + state.messages
 
-    # Combine the system prompt with the agent's conversation history   
-    messages = [
-        {"role": "system", "content": configuration.research_plan_system_prompt}
-    ] + state.messages
+    # # Use the model to generate the research plan and ensure output matches the Plan structure
+    # response = cast(Plan, await model.ainvoke(messages))
 
-    # Use the model to generate the research plan and ensure output matches the Plan structure
-    response = cast(Plan, await model.ainvoke(messages))
-
-    # Return the research steps and a placeholder for 'documents'
-    return {"steps": response["steps"], "documents": "delete"}
+    # # Return the research steps and a placeholder for 'documents'
+    # return {"steps": response["steps"], "documents": "delete"}
 
 
 # TODO ADD TOOL HERE TO CONDUCT RESEARCH
@@ -204,11 +391,12 @@ async def conduct_research(state: AgentState) -> dict[str, Any]:
         - Invokes the researcher_graph with the first step of the research plan.
         - Updates the state with the retrieved documents and removes the completed step.
     """
-    # Invoke the researcher_graph with the first research step to conduct research
-    result = await researcher_graph.ainvoke({"question": state.steps[0]})
+    pass
+    # # Invoke the researcher_graph with the first research step to conduct research
+    # result = await researcher_graph.ainvoke({"question": state.steps[0]})
 
-    # Return the research results ('documents') and the updated research plan ('steps' without the first step)
-    return {"documents": result["documents"], "steps": state.steps[1:]}
+    # # Return the research results ('documents') and the updated research plan ('steps' without the first step)
+    # return {"documents": result["documents"], "steps": state.steps[1:]}
 
 
 def check_finished(state: AgentState) -> Literal["respond", "conduct_research"]:
@@ -248,39 +436,40 @@ async def respond(
     Returns:
         dict[str, list[str]]: A dictionary with a 'messages' key containing the generated response.
     """
-    # Load the agent's language model specified in the input config
-    configuration = AgentConfiguration.from_runnable_config(config)
-    model = load_chat_model(configuration.response_model)
+    pass
+    # # Load the agent's language model specified in the input config
+    # configuration = AgentConfiguration.from_runnable_config(config)
+    # model = load_chat_model(configuration.response_model)
 
-    # Format the retrieved documents into a suitable context for the response prompt
-    context = format_docs(state.documents)
+    # # Format the retrieved documents into a suitable context for the response prompt
+    # context = format_docs(state.documents)
 
-    # Format the system prompt (using the retrieved documents) to respond to the specific query
-    system_prompt = configuration.response_system_prompt.format(context=context)
+    # # Format the system prompt (using the retrieved documents) to respond to the specific query
+    # system_prompt = configuration.response_system_prompt.format(context=context)
 
-    # Combine the system prompt with the agent's conversation history
-    messages = [{"role": "system", "content": system_prompt}] + state.messages
+    # # Combine the system prompt with the agent's conversation history
+    # messages = [{"role": "system", "content": system_prompt}] + state.messages
 
-    # Return the response based on the retrieved documents
-    response = await model.ainvoke(messages)
-    return {"messages": [response]}
+    # # Return the response based on the retrieved documents
+    # response = await model.ainvoke(messages)
+    # return {"messages": [response]}
 
 
 # Define the graph
 builder = StateGraph(AgentState, input=InputState, config_schema=AgentConfiguration)
-builder.add_node(analyze_and_route_query)
-builder.add_node(ask_for_more_info)
-builder.add_node(respond_to_general_query)
-builder.add_node(create_research_plan)
-builder.add_node(conduct_research)
-builder.add_node(respond)
+builder.add_node("human", human_node)
+builder.add_node("analyze_and_route_query", analyze_and_route_query)
+builder.add_node("ask_user_for_more_info", ask_user_for_more_info)
+builder.add_node("respond_to_general_movie_question", respond_to_general_movie_question)
+builder.add_node("create_recommendation_research_plan", create_recommendation_research_plan)
+builder.add_node("conduct_research", conduct_research)
+builder.add_node("respond", respond)
 
 builder.add_edge(START, "analyze_and_route_query")
-builder.add_conditional_edges("analyze_and_route_query", route_query)
-builder.add_edge("create_research_plan", "conduct_research")
-builder.add_conditional_edges("conduct_research", check_finished)
-builder.add_edge("ask_for_more_info", END)
-builder.add_edge("respond_to_general_query", END)
+# builder.add_edge("create_recommendation_research_plan", "conduct_research")
+# builder.add_conditional_edges("conduct_research", check_finished) # DA TOGLIERE ---> usa Command
+builder.add_edge("ask_user_for_more_info", END)
+builder.add_edge("respond_to_general_movie_question", END)
 builder.add_edge("respond", END)
 
 # Compile into a graph object that you can invoke and deploy.
