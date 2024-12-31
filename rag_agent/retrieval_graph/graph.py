@@ -122,6 +122,8 @@ async def human_node(
 
     active_agent = langgraph_triggers[0].split(":")[1]
 
+    print("human_node -----------------> ", active_agent)
+
     return Command(
         update={
             "messages": [
@@ -162,8 +164,6 @@ async def analyze_and_route_query(
     # Format the system prompt to route the query
     system_prompt = configuration.router_system_prompt
 
-    print("======> ", state.messages)
-
     # Combine the system prompt with the agent's conversation history
     messages = [{"role": "system", "content": system_prompt}] + state.messages
 
@@ -172,8 +172,8 @@ async def analyze_and_route_query(
         Router, await model.with_structured_output(Router).ainvoke(messages)
     )
     #state.router = routing_response  # Update the state
-    print("---------> ", routing_response)
-    print("---------> ", routing_response['type'])
+    print("analyze_and_route_query ---------> ", routing_response['type'])
+    print("analyze_and_route_query ---------> ", routing_response)
 
     # Return the structured routing result
     return Command(
@@ -467,9 +467,11 @@ async def respond(
     # return {"messages": [response]}
 
 
+################################################### <<<<<<<<<<<<<<<<<--------------------------- DA QUI, DA SISTEMARE LA LOGICA DI USER_VALIDATION
+@log_node_state_after_return
 async def user_validation(
     state: AgentState, *, config: RunnableConfig
-) -> Command[Literal["human", "analyze_and_route_query", END]]:
+) -> Command[Literal["human", "respond_to_general_movie_question", "create_recommendation_research_plan", END]]:
     # Load the agent's language model specified in the input config
     configuration = AgentConfiguration.from_runnable_config(config)
     model = load_chat_model(configuration.query_model)
@@ -484,6 +486,7 @@ async def user_validation(
 
     # Get the previous node from which this validation node was reached
     previous_node = state.router["type"] 
+    print("user_validation -------------> ", previous_node)
 
     validation_tools = [
         make_handoff_tool(state, agent_name=previous_node),
@@ -500,18 +503,19 @@ async def user_validation(
             Your job is to validate if the user is satisfied with the provided response and, in the case in which the user is not satisfied about the answer, you must redact a brief report about the user complaint and redirect the user to the previous agent `{previous_node}`.
 
             Follow these steps:
-            1. If the user seems satisfied about the provided response so far, transfer the user to the `END` node.
-            2. Otherwise, if the user does not seem satisfied about the provided response so far, and the user complaints seems clear to you, then transfer the user back to the `{previous_node}` agent.
-            3. Otherwise, if the user complaint is not clear, ask the user to provide additional relevant information in order to understand its complaint.
-            4. In this way, at the next iterations, you will be able to redirect the user back to the `{previous_node}` agent and to provide the agent a report about the complaint.
+            1. If the last message was the response of the agent `{previous_node}`, ask the user if it is satisfied by the response.
+            2. If the user seems satisfied about the response provided by the agent `{previous_node}`, transfer the user to the `END` node.
+            3. Otherwise, if the user does not seem satisfied about the provided response so far AND if the user complaints seems clear to you, then transfer the user back to the `{previous_node}` agent.
+            4. Otherwise, if the user complaint is not clear to you, ask the user to provide any additional relevant information in order to understand its complaint, and write a report about it.
+            5. In this way, at the next iterations, you will be able to redirect the user back to the `{previous_node}` agent, and your report will be used by the agent to provide a better response to the user.
 
             Example 1:
                 HumanMessage: Thank you for the information.
                 Tool Call: `transfer_to_END`
 
             Example 2:
-                HumanMessage: I asked you about the cast of Top Gun, but you provided me information about the movie plot instead.
-                Tool Call: `transfer_to_{previous_node}`
+                HumanMessage: I asked you about the cast of Top Gun, but you provided me information about the movie plot.
+                AIMessage: The user is complaining about the fact that he asked for the cast of Top Gun, but the agent provided information about the movie plot instead.
 
             Example 3:
                 ...Message History...
@@ -558,7 +562,7 @@ async def user_validation(
 
         # ERROR LOG
         state_log(
-            function_name="ask_user_for_more_info", 
+            function_name="user_validation", 
             state=state,
             additional_fields={"Error": e},
             modality="error"
@@ -592,8 +596,11 @@ builder.add_node("respond", respond)
 builder.add_node("user_validation", user_validation)
 
 builder.add_edge(START, "analyze_and_route_query")
-# builder.add_edge("create_recommendation_research_plan", "conduct_research")
-# builder.add_conditional_edges("conduct_research", check_finished) # DA TOGLIERE ---> usa Command
+builder.add_edge("create_recommendation_research_plan", "conduct_research")
+#builder.add_conditional_edges("conduct_research", check_finished) # DA TOGLIERE ---> usa Command 
+###########
+builder.add_edge("conduct_research", "respond")
+###########
 #builder.add_edge("ask_user_for_more_info", END)
 builder.add_edge("respond_to_general_movie_question", "user_validation")
 builder.add_edge("respond", "user_validation")
