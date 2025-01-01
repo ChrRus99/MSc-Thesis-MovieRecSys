@@ -5,6 +5,7 @@ import networkx as nx
 
 # Util
 import os
+import pickle
 import random
 import numpy as np
 
@@ -80,10 +81,6 @@ class HeterogeneousGraphDatasetHandler:
         self.__y_ratings = None
         self.__edge_index_user_to_movie = None
 
-        # Project folders
-        processed_datasets_dir = '..\\Src\\datasets\\processed'
-        self.model_filename = os.path.join(processed_datasets_dir, 'MovieLensGraphDataset.pth')
-
     @property
     def users_ratings_df(self):
         return self.__users_ratings_df
@@ -100,9 +97,28 @@ class HeterogeneousGraphDatasetHandler:
     def unique_movies_ids(self):
         return self.__unique_movies_ids
 
+    # def add_users_ratings_data(self, new_ratings_df: pd.DataFrame):
+    #     """
+    #         Adds new user ratings data to the existing tabular dataset.
+
+    #         Parameters:
+    #             new_ratings_df (pd.DataFrame): New user ratings DataFrame to be added.
+
+    #         Returns:
+    #             None
+    #     """
+    #     # Concatenate the new data
+    #     #self.__users_ratings_df = pd.concat([self.__users_ratings_df, pd.DataFrame.from_records(new_ratings_df)])  # Deprecated
+    #     combined_df = pd.concat([self.__users_ratings_df, new_ratings_df.reset_index(drop=True)])
+
+    #     # Drop duplicates based on userId and movieId, keeping the latest entry
+    #     self.__users_ratings_df = combined_df.drop_duplicates(subset=['userId', 'movieId'], keep='last').reset_index(drop=True)
+
+
     def add_users_ratings_data(self, new_ratings_df: pd.DataFrame):
         """
             Adds new user ratings data to the existing tabular dataset.
+            Ensures that mappings for userId and movieId are updated without duplicating columns.
 
             Parameters:
                 new_ratings_df (pd.DataFrame): New user ratings DataFrame to be added.
@@ -110,7 +126,36 @@ class HeterogeneousGraphDatasetHandler:
             Returns:
                 None
         """
-        self.__users_ratings_df = pd.concat([self.__users_ratings_df, pd.DataFrame.from_records(new_ratings_df)])
+        if not isinstance(new_ratings_df, pd.DataFrame):
+            raise ValueError("The input data must be a pandas DataFrame.")
+
+        # Concatenate the new data
+        combined_df = pd.concat([self.__users_ratings_df, new_ratings_df.reset_index(drop=True)])
+
+        # Drop duplicates based on userId and movieId, keeping the latest entry
+        self.__users_ratings_df = combined_df.drop_duplicates(subset=['userId', 'movieId'], keep='last').reset_index(drop=True)
+
+        # Update unique user and movie mappings
+        self.__unique_users_ids = pd.DataFrame(data={
+            'userId': self.__users_ratings_df['userId'].unique(),
+            'mappedUserId': pd.RangeIndex(len(self.__users_ratings_df['userId'].unique()))
+        })
+
+        self.__unique_movies_ids = pd.DataFrame(data={
+            'movieId': self.__users_ratings_df['movieId'].unique(),
+            'mappedMovieId': pd.RangeIndex(len(self.__users_ratings_df['movieId'].unique()))
+        })
+
+        # Drop existing mapping columns if they exist
+        if 'mappedUserId' in self.__users_ratings_df.columns:
+            self.__users_ratings_df = self.__users_ratings_df.drop(columns=['mappedUserId'])
+        if 'mappedMovieId' in self.__users_ratings_df.columns:
+            self.__users_ratings_df = self.__users_ratings_df.drop(columns=['mappedMovieId'])
+
+        # Merge the updated mappings with the DataFrame
+        self.__users_ratings_df = self.__users_ratings_df.merge(self.__unique_users_ids, on='userId', how='left')
+        self.__users_ratings_df = self.__users_ratings_df.merge(self.__unique_movies_ids, on='movieId', how='left')
+
 
     def build_graph_dataset(self):
         """
@@ -165,31 +210,69 @@ class HeterogeneousGraphDatasetHandler:
         """
             Returns the constructed heterogeneous graph dataset.
 
+            Parameters:
+                filepath (str): Path to the .pkl file where the instance will be saved.
+
             Returns:
                 HeteroData: Constructed graph dataset.
         """
         return self.__data
 
-    def save_graph_dataset(self):
+    def save_graph_dataset(self, filepath):
         """
-            Saves the constructed heterogeneous graph dataset to disk.
+            Saves the constructed heterogeneous graph dataset to a .pth file.
+
+            Parameters:
+                filepath (str): Path to the .pkl file where the constructed heterogeneous graph 
+                dataset will be saved.
 
             Returns:
                 None
         """
         # Save the dataset to disk
-        torch.save(self.__data, self.model_filename)
+        torch.save(self.__data, filepath)
 
-    def load_graph_dataset(self):
+    def load_graph_dataset(self, filepath):
         """
-            Loads the heterogeneous graph dataset from disk.
+            Loads the heterogeneous graph dataset from a .pth file.
+
+            Parameters:
+                filepath (str): Path to the .pth file from which the the constructed heterogeneous 
+                graph dataset will be loaded.
 
             Returns:
                 HeteroData: Loaded graph dataset.
         """
         # Load the dataset from disk
-        self.__data = torch.load(self.model_filename)
+        self.__data = torch.load(filepath)
         return self.__data
+
+    def save_instance(self, filepath):
+        """
+            Saves the entire class instance to a .pkl file.
+
+            Parameters:
+                filepath (str): Path to the .pkl file where the instance will be saved.
+
+            Returns:
+                None
+        """
+        with open(filepath, 'wb') as f:
+            pickle.dump(self, f)
+
+    @staticmethod
+    def load_instance(filepath):
+        """
+            Loads a class instance from a .pkl file.
+
+            Parameters:
+                filepath (str): Path to the .pkl file from which the instance will be loaded.
+
+            Returns:
+                HeterogeneousGraphDatasetHandler: The loaded class instance.
+        """
+        with open(filepath, 'rb') as f:
+            return pickle.load(f)
 
     def plot_graph_dataset(self, node_sample_ratio=1, with_labels=True):
         """
@@ -311,6 +394,55 @@ class HeterogeneousGraphDatasetHandler:
         self.__X_users = user_features
         # X_users.shape = [num_users_nodes x user_node_feature_dim]
 
+    # def __build_label_edges_features(self):
+    #     """
+    #         Constructs edges labels (ratings) and connects user and movie nodes through edges.
+
+    #         Returns:
+    #             None
+    #     """
+    #     ## EXTRACT LABELS=RATINGS OF RATED MOVIES
+    #     # Extract the labels: the ratings (which are the edges features)
+    #     ratings = self.__users_ratings_df['rating'].values
+
+    #     ## TRANSFORM EDGE LABELS INTO A NUMPY NDARRAY
+    #     # Convert PyTorch tensor
+    #     self.__y_ratings = torch.from_numpy(ratings).to(torch.float)
+    #     # y_ratings.shape = [tot_num_of_ratings] = [tot_num_of_edges]
+
+    #     ## CONNECT HETEROGENEOUS NODES THROUGH EDGES
+    #     # Create a mapping from the userId to a unique consecutive value in the range [0, num_users]
+    #     self.__unique_users_ids = self.__users_ratings_df['userId'].unique()
+    #     self.__unique_users_ids = pd.DataFrame(data={
+    #         'userId': self.__unique_users_ids,
+    #         'mappedUserId': pd.RangeIndex(len(self.__unique_users_ids))
+    #     })
+
+    #     # Create a mapping from the movieId to a unique consecutive value in the range [0, num_movies]
+    #     self.__unique_movies_ids = self.__users_ratings_df['movieId'].unique()
+    #     self.__unique_movies_ids = pd.DataFrame(data={
+    #         'movieId': self.__unique_movies_ids,
+    #         'mappedMovieId': pd.RangeIndex(len(self.__unique_movies_ids))
+    #     })
+
+    #     # Merge the mappings with the original data frame:
+    #     self.__users_ratings_df = self.__users_ratings_df.merge(self.__unique_users_ids, on='userId')
+    #     self.__users_ratings_df = self.__users_ratings_df.merge(self.__unique_movies_ids, on='movieId')
+
+    #     # With this, we are ready to create the edge_index representation in COO format, following the PyG semantics
+    #     self.__edge_index_user_to_movie = torch.stack([
+    #         torch.tensor(self.__users_ratings_df['mappedUserId'].values),
+    #         torch.tensor(self.__users_ratings_df['mappedMovieId'].values)
+    #     ], dim=0)
+
+    #     # Save node indices:
+    #     self.__data["user"].node_id = torch.arange(len(self.__unique_users_ids))
+    #     self.__data["movie"].node_id = torch.arange(len(self.__movies_df))
+
+    #     # print("Edge Labels (y_ratings):", self.__y_ratings)
+    #     # print("Edge Index (user-movie):", self.__edge_index_user_to_movie)
+
+    
     def __build_label_edges_features(self):
         """
             Constructs edges labels (ratings) and connects user and movie nodes through edges.
@@ -318,43 +450,45 @@ class HeterogeneousGraphDatasetHandler:
             Returns:
                 None
         """
+        ## CHECK IF MAPPINGS ALREADY EXIST
+        # Regenerate mappings only if they are not present in the DataFrame
+        if 'mappedUserId' not in self.__users_ratings_df.columns or 'mappedMovieId' not in self.__users_ratings_df.columns:
+            # Create a mapping from the userId to a unique consecutive value in the range [0, num_users]
+            self.__unique_users_ids = pd.DataFrame(data={
+                'userId': self.__users_ratings_df['userId'].unique(),
+                'mappedUserId': pd.RangeIndex(len(self.__users_ratings_df['userId'].unique()))
+            })
+
+            # Create a mapping from the movieId to a unique consecutive value in the range [0, num_movies]
+            self.__unique_movies_ids = pd.DataFrame(data={
+                'movieId': self.__users_ratings_df['movieId'].unique(),
+                'mappedMovieId': pd.RangeIndex(len(self.__users_ratings_df['movieId'].unique()))
+            })
+
+            # Merge regenerated mappings with the original data frame
+            self.__users_ratings_df = self.__users_ratings_df.merge(self.__unique_users_ids, on='userId', how='left')
+            self.__users_ratings_df = self.__users_ratings_df.merge(self.__unique_movies_ids, on='movieId', how='left')
+
         ## EXTRACT LABELS=RATINGS OF RATED MOVIES
         # Extract the labels: the ratings (which are the edges features)
         ratings = self.__users_ratings_df['rating'].values
 
         ## TRANSFORM EDGE LABELS INTO A NUMPY NDARRAY
-        # Convert PyTorch tensor
+        # Convert ratings to a PyTorch tensor
         self.__y_ratings = torch.from_numpy(ratings).to(torch.float)
         # y_ratings.shape = [tot_num_of_ratings] = [tot_num_of_edges]
 
         ## CONNECT HETEROGENEOUS NODES THROUGH EDGES
-        # Create a mapping from the userId to a unique consecutive value in the range [0, num_users]
-        self.__unique_users_ids = self.__users_ratings_df['userId'].unique()
-        self.__unique_users_ids = pd.DataFrame(data={
-            'userId': self.__unique_users_ids,
-            'mappedUserId': pd.RangeIndex(len(self.__unique_users_ids))
-        })
-
-        # Create a mapping from the movieId to a unique consecutive value in the range [0, num_movies]
-        self.__unique_movies_ids = self.__users_ratings_df['movieId'].unique()
-        self.__unique_movies_ids = pd.DataFrame(data={
-            'movieId': self.__unique_movies_ids,
-            'mappedMovieId': pd.RangeIndex(len(self.__unique_movies_ids))
-        })
-
-        # Merge the mappings with the original data frame:
-        self.__users_ratings_df = self.__users_ratings_df.merge(self.__unique_users_ids, on='userId')
-        self.__users_ratings_df = self.__users_ratings_df.merge(self.__unique_movies_ids, on='movieId')
-
-        # With this, we are ready to create the edge_index representation in COO format, following the PyG semantics
+         # Create edge indices using the mappings (where edge_index  representation is in COO format, following the PyG semantics)
         self.__edge_index_user_to_movie = torch.stack([
             torch.tensor(self.__users_ratings_df['mappedUserId'].values),
             torch.tensor(self.__users_ratings_df['mappedMovieId'].values)
         ], dim=0)
 
-        # Save node indices:
+        ## SAVE NODE INDICES
+        # Save the node indices for users and movies
         self.__data["user"].node_id = torch.arange(len(self.__unique_users_ids))
-        self.__data["movie"].node_id = torch.arange(len(self.__movies_df))
+        self.__data["movie"].node_id = torch.arange(len(self.__unique_movies_ids))
 
         # print("Edge Labels (y_ratings):", self.__y_ratings)
         # print("Edge Index (user-movie):", self.__edge_index_user_to_movie)

@@ -1,11 +1,12 @@
 # Dataset
-import pandas as pd
 import copy
+import pandas as pd
 
 # Util
-import os
 import ast
 import numpy as np
+import os
+import pickle
 
 """
     References:
@@ -127,6 +128,88 @@ class TabularDatasetHandler:
         self.__keywords_df = preprocessor.keywords_df
         
         return self
+
+    def save_preprocessed_tabular_datasets(self, path: str):
+        """
+            Saves all datasets to the given path in CSV format.
+
+            Parameters:
+                path (str): The directory path to save the datasets.
+        """
+        datasets = {
+            "users_ratings.csv": self.__users_ratings_df,
+            "movies.csv": self.__movies_df,
+            "links.csv": self.__links_df,
+            "credits.csv": self.__credits_df,
+            "keywords.csv": self.__keywords_df,
+        }
+
+        os.makedirs(path, exist_ok=True)
+
+        for filename, df in datasets.items():
+            try:
+                df.to_csv(os.path.join(path, filename), index=False)
+            except Exception as e:
+                raise Exception(f"Error saving dataset '{filename}' to path '{path}': {e}")
+
+    @staticmethod
+    def load_preprocessed_tabular_datasets(path: str):
+        """
+            Loads all datasets from the given directory and returns a new TabularDatasetHandler instance.
+
+            Parameters:
+                path (str): The directory path to load the datasets from.
+
+            Returns:
+                TabularDatasetHandler: A new instance with loaded datasets.
+        """
+        handler = TabularDatasetHandler(data_path=path)
+
+        datasets = {
+            "users_ratings.csv": "__users_ratings_df",
+            "movies.csv": "__movies_df",
+            "links.csv": "__links_df",
+            "credits.csv": "__credits_df",
+            "keywords.csv": "__keywords_df",
+        }
+
+        for filename, attr in datasets.items():
+            file_path = os.path.join(path, filename)
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"Dataset file '{filename}' not found in directory '{path}'")
+            try:
+                setattr(handler, attr, pd.read_csv(file_path))
+            except Exception as e:
+                raise Exception(f"Error loading dataset '{filename}' from path '{path}': {e}")
+
+        return handler
+
+    def save_instance(self, filepath):
+        """
+            Saves the entire class instance to a .pkl file.
+
+            Args:
+                filepath (str): Path to the .pkl file where the instance will be saved.
+
+            Returns:
+                None
+        """
+        with open(filepath, 'wb') as f:
+            pickle.dump(self, f)
+
+    @staticmethod
+    def load_instance(filepath):
+        """
+            Loads a class instance from a .pkl file.
+
+            Args:
+                filepath (str): Path to the .pkl file from which the instance will be loaded.
+
+            Returns:
+                TabularDatasetHandler: The loaded class instance.
+        """
+        with open(filepath, 'rb') as f:
+            return pickle.load(f)
 
     class __DatasetLoader:
         """
