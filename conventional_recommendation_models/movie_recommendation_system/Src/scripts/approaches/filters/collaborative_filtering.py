@@ -4,9 +4,11 @@ import os
 
 class CollaborativeFilteringInterface(ABC):
     """
-        CollaborativeFilteringInterface - Abstract Class for Collaborative Filtering Movie Recommendation System.
+        CollaborativeFilteringInterface - Abstract Class for Collaborative Filtering Movie 
+        Recommendation System.
 
-        This abstract class defines the structure of a movie recommendation system based on collaborative-filtering.
+        This abstract class defines the structure of a movie recommendation system based on 
+        collaborative-filtering.
 
         Attributes:
             _dataset: Dataset for collaborative filtering.

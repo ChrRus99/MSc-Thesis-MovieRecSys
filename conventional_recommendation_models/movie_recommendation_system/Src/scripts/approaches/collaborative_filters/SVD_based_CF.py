@@ -21,16 +21,16 @@ class SVD_Based_CollaborativeFilter(CollaborativeFilteringInterface):
     """
         SVD_Based_CollaborativeFilter - User-Based Collaborative Filtering using SVD Model
 
-        This class implements a movie recommendation system based on user-based collaborative filtering. It uses the SVD
-        (Singular Value Decomposition) model from the surprise library to provide personalized movie recommendations for
-        users.
+        This class implements a movie recommendation system based on user-based collaborative 
+        filtering. It uses the SVD (Singular Value Decomposition) model from the surprise library to
+        provide personalized movie recommendations for users.
 
         Parameters:
             tabular_dataset_handler (TabularDatasetHandler): An instance of TabularDatasetHandler.
 
         Attributes:
             __users_ratings_df (pd.DataFrame): A copy of the users ratings dataframe from the dataset.
-            __movies_df (pd.DataFrame): A copy of the small movies dataframe from the dataset.
+            __movies_df (pd.DataFrame): DataFrame containing movies information.
             __dataset (surprise.dataset.Dataset): Surprise dataset created from users ratings dataframe.
             __model (surprise.prediction_algorithms.matrix_factorization.SVD): SVD model for collaborative filtering.
             __trainset (surprise.Trainset): Training set for the SVD model.
@@ -44,7 +44,7 @@ class SVD_Based_CollaborativeFilter(CollaborativeFilteringInterface):
 
         # Initialize some brand-new copies of the required dataframes from dataset
         self.__users_ratings_df = tabular_dataset_handler.get_users_ratings_df_deepcopy()
-        self.__movies_df = tabular_dataset_handler.get_small_movies_df_deepcopy()
+        self.__movies_df = tabular_dataset_handler.get_movies_df_deepcopy()
 
         # Create a dataset from the 'users_ratings_df' for training and test the recommender system models provided by
         # the 'surprise' library

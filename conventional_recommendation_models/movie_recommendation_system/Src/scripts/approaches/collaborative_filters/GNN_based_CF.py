@@ -4,6 +4,7 @@ import numpy as np
 
 # Util
 import os
+import pickle
 import shutil
 from overrides import overrides
 from typing import Tuple
@@ -42,8 +43,9 @@ from Src.scripts.approaches.models.GNN_regression_model import GNNEncoderInterfa
 
 class GNN_Based_CollaborativeFilter(CollaborativeFilteringInterface):
     """
-        GNN_Based_CollaborativeFilter is a class implementing a movie recommendation system using collaborative filtering.
-        Specifically, it is a user-based collaborative filter that makes use of GNNs models.
+        GNN_Based_CollaborativeFilter is a class implementing a movie recommendation system using 
+        collaborative filtering. Specifically, it is a user-based collaborative filter that makes 
+        use of GNNs models.
 
         Attributes:
             __gdh (HeterogeneousGraphDatasetHandler): An instance of HeterogeneousGraphDatasetHandler managing the dataset.
@@ -82,8 +84,8 @@ class GNN_Based_CollaborativeFilter(CollaborativeFilteringInterface):
     @overrides
     def train(self, num_epochs=300, lr=0.01):
         """
-            Trains the GNN-based collaborative filtering model on the training set obtained by a partition of the
-            heterogeneous graph dataset.
+            Trains the GNN-based collaborative filtering model on the training set obtained by a 
+            partition of the heterogeneous graph dataset.
 
             This function supports TensorBoard to get the final plot of the training.
 
@@ -157,7 +159,10 @@ class GNN_Based_CollaborativeFilter(CollaborativeFilteringInterface):
             return float(rmse), float(mae)
 
         # Store tensorboard information to get the plot at the end of the training
-        tensorboard_foldername = os.path.join(self.__tensorboard_path, "Training_plot_" + self.__gnn.model_name + "_based_model_" + str(num_epochs) + "_epochs")
+        tensorboard_foldername = os.path.join(
+            self.__tensorboard_path,
+            "Training_plot_" + self.__gnn.model_name + "_based_model_" + str(num_epochs) + "_epochs"
+        )
 
         if os.path.exists(tensorboard_foldername):    # If the folder already exists delete it
             shutil.rmtree(tensorboard_foldername)
@@ -177,7 +182,7 @@ class GNN_Based_CollaborativeFilter(CollaborativeFilteringInterface):
             val_rmse, val_mae = evaluation_step(self.__val_data)
 
             # Print training information
-            print(f'Epoch: {epoch:03d}, Train loss: {loss:.4f}, Train RMSE: {train_rmse:.4f}, Train MAE: {train_mae:.4f}, Val RMSE: {val_rmse:.4f}, Val MAE: {val_mae:.4f}')
+            print(f"Epoch: {epoch:03d}, Train loss: {loss:.4f}, Train RMSE: {train_rmse:.4f}, Train MAE: {train_mae:.4f}, Val RMSE: {val_rmse:.4f}, Val MAE: {val_mae:.4f}")
 
             # Add RMSE and MAE metrics to tensorboard (two separated plots)
             writer.add_scalar('RMSE/train', train_rmse, epoch)
@@ -188,15 +193,16 @@ class GNN_Based_CollaborativeFilter(CollaborativeFilteringInterface):
         print(f'\nTraining TensorBoard information of model {self.__gnn.model_name} saved')
 
         # Store the trained model
-        model_filename = os.path.join(self.__trained_models_path , self.__gnn.model_name + "_based_model_.pkl")
-        torch.save(self._model, model_filename)
+        model_name = self.__gnn.model_name + "_based_model_.pkl"
+        model_filepath = os.path.join(self.__trained_models_path, model_name)
+        torch.save(self._model, model_filepath)
         print(f'\nTrained model {self.__gnn.model_name} saved')
 
     @overrides
     def evaluate_performance(self):
         """
-            Evaluates the model on unseen data from the test set obtained by a partition of the heterogeneous graph
-            dataset.
+            Evaluates the model on unseen data from the test set obtained by a partition of the 
+            heterogeneous graph dataset.
 
             Returns:
                 None
@@ -233,7 +239,7 @@ class GNN_Based_CollaborativeFilter(CollaborativeFilteringInterface):
     @overrides
     def predict(self, user_id, movie_id, gt_rating = None):
         """
-            Predict the rating for a given user and movie.
+            Predicts the rating for a given user and movie.
 
             Parameters:
                 user_id (int): The ID of the user.
@@ -245,8 +251,7 @@ class GNN_Based_CollaborativeFilter(CollaborativeFilteringInterface):
         """
         # Map user and movie IDs (of the tabular dataset) to their corresponding indices in the graph dataset
         mapped_user_id = self.__gdh.unique_users_ids[self.__gdh.unique_users_ids['userId'] == user_id]['mappedUserId'].item()
-        mapped_movie_id = self.__gdh.unique_movies_ids[self.__gdh.unique_movies_ids['movieId'] == movie_id][
-            'mappedMovieId'].item()
+        mapped_movie_id = self.__gdh.unique_movies_ids[self.__gdh.unique_movies_ids['movieId'] == movie_id]['mappedMovieId'].item()
 
         # Create edge_label_index for the given user and movie
         edge_label_index = (
@@ -285,7 +290,7 @@ class GNN_Based_CollaborativeFilter(CollaborativeFilteringInterface):
 
     def suggest_new_movie(self, user_id):
         """
-            Suggests a new movie for a given user, based on the history of his past ratings.
+            Suggests a new movie for a given user, based on the history of user's past ratings.
 
             Parameters:
                 user_id (int): The ID of the user.
@@ -311,22 +316,89 @@ class GNN_Based_CollaborativeFilter(CollaborativeFilteringInterface):
         movie = movies_not_rated.sample(1)
 
         # Create new `edge_label_index` between the user and the movie
-        edge_label_index = torch.tensor([
-            mapped_user_id,
-            movie.mappedMovieId.item()
-        ])
+        edge_label_index = (
+            torch.tensor([mapped_user_id], dtype=torch.long),
+            torch.tensor([movie['mappedMovieId'].item()], dtype=torch.long)
+        )
+
+        # Move the input data to the device
+        data = self.__graph_dataset.to(self.__device)
 
         # Predict the user_id's rating for that movie
         with torch.no_grad():
-            self.__test_data.to(self.__device)
             pred = self._model(
-                self.__test_data.x_dict,
-                self.__test_data.edge_index_dict,
+                data.x_dict,
+                data.edge_index_dict,
                 edge_label_index
             )
             pred = pred.clamp(min=0, max=5).detach().cpu().numpy()
 
         return movie, pred.item()
+
+    def predict_ratings(self, user_id, subset_movies_df, include_gt_ratings: bool = True):
+        """
+            Predicts ratings for a user on a subset of movies provided as a DataFrame.
+
+            Parameters:
+                user_id (int): ID of the user.
+                subset_movies_df (pd.DataFrame): DataFrame containing movie IDs to predict ratings for.
+                include_gt_ratings (bool, optional): Whether to include ground truth ratings for 
+                                                     seen movies. Default is True.
+
+            Returns:
+                pd.DataFrame: DataFrame with movie indices, predicted ratings, and optional ground 
+                truth ratings.
+        """
+        # Extract movie IDs from the subset DataFrame
+        movie_ids = subset_movies_df['movieId'].tolist()
+
+        # Initialize lists to store predictions and ground truth ratings
+        predicted_ratings = []
+        ground_truth_ratings = []
+
+        # Iterate over the list of movie indices
+        for movie_id in movie_ids:
+            pred_rating, gt_rating = self.predict(user_id, movie_id)
+            predicted_ratings.append(pred_rating)
+            ground_truth_ratings.append(gt_rating)
+
+        # Create a DataFrame with the results
+        results_df = pd.DataFrame({
+            'movieId': movie_ids,
+            'predicted_rating': predicted_ratings
+        })
+
+        if include_gt_ratings:
+            results_df['ground_truth_rating'] = ground_truth_ratings
+
+        return results_df
+        
+    def store_class_instance(self, filepath):
+        """
+            Store the entire class instance to a .pkl file.
+
+            Parameters:
+                filepath (str): Path to the .pkl file where the instance will be saved.
+
+            Returns:
+                None
+        """
+        with open(filepath, 'wb') as f:
+            pickle.dump(self, f)
+
+    @staticmethod
+    def load_class_instance(filepath):
+        """
+            Loads a class instance from a .pkl file.
+
+            Parameters:
+                filepath (str): Path to the .pkl file from which the instance will be loaded.
+
+            Returns:
+                GNN_Based_CollaborativeFilter: The loaded class instance.
+        """
+        with open(filepath, 'rb') as f:
+            return pickle.load(f)
 
     def __edge_level_dataset_split(
             self,
@@ -372,9 +444,10 @@ class GNN_Based_CollaborativeFilter(CollaborativeFilteringInterface):
         """
             Creates a mini-batch loader that generates sub-graphs for training.
 
-            Note: while this step is not strictly necessary for small-scale graphs, it is absolutely necessary to apply
-            GNNs on larger graphs that do not fit onto GPU memory otherwise. To do this it samples multiple hops from
-            both ends of an edge and creates a subgraph from it (using the loader.LinkNeighborLoader).
+            Note: while this step is not strictly necessary for small-scale graphs, it is absolutely
+            necessary to apply GNNs on larger graphs that do not fit onto GPU memory otherwise. 
+            To do this it samples multiple hops from both ends of an edge and creates a subgraph 
+            from it (using the loader.LinkNeighborLoader).
 
             Parameters:
                 batch_size (int): The batch size.
@@ -415,9 +488,10 @@ class GNN_Based_CollaborativeFilter(CollaborativeFilteringInterface):
         """
             Creates a mini-batch loader that generates sub-graphs for validation.
 
-            Note: while this step is not strictly necessary for small-scale graphs, it is absolutely necessary to apply
-            GNNs on larger graphs that do not fit onto GPU memory otherwise. To do this it samples multiple hops from
-            both ends of an edge and creates a subgraph from it (using the loader.LinkNeighborLoader).
+            Note: while this step is not strictly necessary for small-scale graphs, it is absolutely
+            necessary to apply GNNs on larger graphs that do not fit onto GPU memory otherwise. 
+            To do this it samples multiple hops from both ends of an edge and creates a subgraph 
+            from it (using the loader.LinkNeighborLoader).
 
             Parameters:
                 batch_size (int): The batch size.

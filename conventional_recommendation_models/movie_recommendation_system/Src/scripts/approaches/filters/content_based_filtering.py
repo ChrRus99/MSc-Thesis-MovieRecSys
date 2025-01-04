@@ -22,29 +22,33 @@ class ContentBasedFiltering:
     """
         ContentBasedFiltering - Movie Recommendation System Based on Content-Based Filtering.
 
-        This class provides functions for implementing a movie recommendation system based on content-based filtering.
-        It includes methods for recommending movies based on movie descriptions and metadata (cast, crew, keywords, and
-        genre).
+        This class provides functions for implementing a movie recommendation system based on 
+        content-based filtering.
+        It includes methods for recommending movies based on movie descriptions and metadata 
+        (cast, crew, keywords, and genre).
     """
 
+    # TODO: da sistemare, vedi metadata_based_recommender
     @staticmethod
     def description_based_recommender(tabular_dataset_handler, movie_title, N, improved=False):
         """
-            Recommends the N top most similar movies to the target movie based on movie descriptions and taglines.
+            Recommends the N top most similar movies to the target movie based on movie descriptions
+            and taglines.
 
             Therefore, this function does not provide personalized recommendations based on the user.
 
             Parameters:
-                tabular_dataset_handler (TabularDatasetHandler): An instance of the DatasetHandler class.
+                tabular_dataset_handler (TabularDatasetHandler): An instance of DatasetHandler.
                 movie_title (str): The title of the movie.
                 N (int): The number of top most similar movies to recommend.
-                improved (bool): Whether to use improved recommendation using the weighted rating (wr) when True.
+                improved (bool): Whether to use improved recommendation using the weighted rating 
+                                 (wr) when True.
 
             Returns:
                 pd.DataFrame: The N top most similar movies based on content.
         """
         # Initialize a brand-new copy of the 'movies_df'
-        movies_df = tabular_dataset_handler.get_small_movies_df_deepcopy()
+        movies_df = tabular_dataset_handler.get_movies_df_deepcopy()
 
         # Process the 'tagline' column
         movies_df['tagline'] = movies_df['tagline'].fillna('')
@@ -53,50 +57,55 @@ class ContentBasedFiltering:
         movies_df['description'] = movies_df['overview'] + movies_df['tagline']
         movies_df['description'] = movies_df['description'].fillna('')
 
-        # Convert the 'description' of each movie into a matrix of token counts
-        tf = TfidfVectorizer(analyzer='word', ngram_range=(1, 2), min_df=0.0, stop_words='english')
-        tf_idf_matrix = tf.fit_transform(movies_df['description'])
+        # Create a TF-IDF vectorizer and generate embeddings for the descriptions
+        vectorizer = TfidfVectorizer(analyzer='word', ngram_range=(1, 2), min_df=0.0, stop_words='english')
+        description_embeddings = vectorizer.fit_transform(movies_df['description'])
 
-        # Compute the cosine similarities between each couple of movies
-        # Note: computing the cosine similarity allows to denote the similarity between two movies.
-        # Note: since we have used the TF-IDF vectorizer, calculating the dot product will directly give us the cosine
-        # similarity score between each couple of movies.
-        cos_similarity = linear_kernel(tf_idf_matrix, tf_idf_matrix)
+        # Check if the movie title exists in the dataset
+        if movie_title not in movies_df['title'].values:
+            raise ValueError(f"Movie '{movie_title}' not found in the dataset")
 
-        # Map movie titles to their indices in the 'movies_df'
-        #movies_df = movies_df.drop(columns='level_0', errors='ignore')  # Drop the existing index column if it exists
-        movies_df = movies_df.reset_index()
-        titles = movies_df['title']
-        indices = pd.Series(movies_df.index, index=movies_df['title'])
+        # Get the index of the target movie
+        idx = movies_df[movies_df['title'] == movie_title].index[0]
 
-        if not improved:
-            return ContentBasedFiltering.__get_recommendations(
-                movies_df, movie_title, N, cos_similarity, titles, indices
-            )[['id', 'title', 'year', 'description']]
-        else:
+        # Calculate the cosine similarities between the target movie and all the other movies
+        cosine_similarities = linear_kernel(description_embeddings[idx], description_embeddings).flatten()
+        similar_indices = cosine_similarities.argsort()[-N-1:-1][::-1]
+        similar_scores = cosine_similarities[similar_indices]
+
+        # Retrieve the recommended movies
+        recommended_movies = movies_df.iloc[similar_indices][['id', 'title', 'year', 'description']]
+        recommended_movies['similarity_score'] = similar_scores
+
+        # Return the improved recommendations if requested
+        if improved:
             return ContentBasedFiltering.__get_improved_recommendations(
-                movies_df, movie_title, N, cos_similarity, titles, indices
+                recommended_movies, movies_df, N
             )[['id', 'title', 'year', 'vote_count', 'vote_average', 'popularity', 'wr']]
+        else:
+            return recommended_movies[['id', 'title', 'year', 'description']]
+
 
     @staticmethod
     def metadata_based_recommender(tabular_dataset_handler, movie_title, N, improved=False):
         """
-            Recommends the N top most similar movies to the target movie based on movie metadata (cast, crew, keywords,
-            and genre).
+            Recommends the N top most similar movies to the target movie based on movie metadata 
+            (cast, crew, keywords, and genre).
 
             Therefore, this function does not provide personalized recommendations based on the user.
 
             Parameters:
-                tabular_dataset_handler (TabularDatasetHandler): An instance of the DatasetHandler class.
+                tabular_dataset_handler (TabularDatasetHandler): An instance of DatasetHandler.
                 movie_title (str): The title of the movie.
                 N (int): The number of top most similar movies to recommend.
-                improved (bool): Whether to use improved recommendation using the weighted rating (wr) when True.
+                improved (bool): Whether to use improved recommendation using the weighted rating 
+                                 (wr) when True.
 
             Returns:
                 pd.DataFrame: The N top most similar movies based on content.
         """
         # Initialize some brand-new copies of the required dataframes from dataset
-        movies_df = tabular_dataset_handler.get_small_movies_df_deepcopy()
+        movies_df = tabular_dataset_handler.get_movies_df_deepcopy()
         credits_df = tabular_dataset_handler.get_credits_df_deepcopy()
         keywords_df = tabular_dataset_handler.get_keywords_df_deepcopy()
 
@@ -181,88 +190,63 @@ class ContentBasedFiltering:
         )
         movies_df['soup'] = movies_df['soup'].apply(lambda x: ' '.join(x))
 
-        # Convert the 'soup' of each movie into a matrix of token counts
-        count = CountVectorizer(analyzer='word', ngram_range=(1, 2), min_df=0.0, stop_words='english')
-        count_matrix = count.fit_transform(movies_df['soup'])
+        # Create a TF-IDF vectorizer and generate embeddings for the soups
+        vectorizer = TfidfVectorizer(stop_words='english')
+        soup_embeddings = vectorizer.fit_transform(movies_df['soup'])
 
-        # Compute the cosine similarities between each couple of movies
-        cos_similarity = cosine_similarity(count_matrix, count_matrix)
+        # Check if the movie title exists in the dataset
+        if movie_title not in movies_df['title'].values:
+            raise ValueError(f"Movie '{movie_title}' not found in the dataset")
 
-        # Map movie titles to their indices in the 'movies_df'
-        #movies_df = movies_df.drop(columns='level_0', errors='ignore')  # Drop the existing index column if it exists
-        movies_df = movies_df.reset_index()
-        titles = movies_df['title']
-        indices = pd.Series(movies_df.index, index=movies_df['title'])
+        # Get the index of the target movie
+        idx = movies_df[movies_df['title'] == movie_title].index[0]
 
-        if not improved:
-            return ContentBasedFiltering.__get_recommendations(
-                movies_df, movie_title, N, cos_similarity, titles, indices
-            )[['id', 'title', 'year', 'soup']]
-        else:
+        # Calculate the cosine similarities between the target movie and all the other movies
+        cosine_similarities = linear_kernel(soup_embeddings[idx], soup_embeddings).flatten()
+        similar_indices = cosine_similarities.argsort()[-N-1:-1][::-1]
+        similar_scores = cosine_similarities[similar_indices]
+
+        # Retrieve the recommended movies
+        recommended_movies = movies_df.iloc[similar_indices][['id', 'title', 'year', 'soup']]
+        recommended_movies['similarity_score'] = similar_scores
+
+        # Return the improved recommendations if requested
+        if improved:
             return ContentBasedFiltering.__get_improved_recommendations(
-                movies_df, movie_title, N, cos_similarity, titles, indices
+                recommended_movies, movies_df, N
             )[['id', 'title', 'year', 'vote_count', 'vote_average', 'popularity', 'wr']]
+        else:
+            return recommended_movies[['id', 'title', 'year', 'soup']]
 
     @staticmethod
-    def __get_recommendations(movies_df, movie_title, N, cos_similarity, titles, indices):
+    def __get_improved_recommendations(recommended_movies_df, movies_df, N, percentile=0.60):
         """
-            Returns the N most similar movies based on the cosine similarity score.
+            Returns improved recommendations by filtering bad movies and considering popularity and 
+            critical response.
+
+            To do that it calculates the top 25 movies based on similarity scores and calculate the
+            i-th percentile movies, that is used as value m for calculating the weighted rating of 
+            each movie using the IMDb's formula.
 
             Parameters:
+                recommended_movies_df (pd.DataFrame): DataFrame containing recommended movies.
                 movies_df (pd.DataFrame): DataFrame containing movie data.
-                movie_title (str): Title of the target movie.
-                N (int): Number of movies to recommend.
-                cos_similarity (np.array): Cosine similarity matrix.
-                titles (pd.Series): Series of movie titles.
-                indices (pd.Series): Series mapping titles to their indices.
-
-            Returns:
-                pd.DataFrame: The N most similar movies.
-
-        """
-        idx = indices[movie_title]
-        sim_scores = list(enumerate(cos_similarity[idx]))
-        sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
-        sim_scores = sim_scores[1:N]
-
-        movies_indices = [i[0] for i in sim_scores]
-
-        return movies_df.loc[movies_indices]
-
-    @staticmethod
-    def __get_improved_recommendations(movies_df, movie_title, N, cos_similarity, titles, indices, percentile=0.60):
-        """
-            Returns improved recommendations by filtering bad movies and considering popularity and critical response.
-
-            To do that it calculates the top 25 movies based on similarity scores and calculate the i-th percentile
-            movies, that is used as value m for calculating the weighted rating of each movie using the IMDb's formula.
-
-            Parameters:
-                movies_df (pd.DataFrame): DataFrame containing movie data.
-                movie_title (str): Title of the target movie.
-                N (int): Number of movies to recommend.
-                cos_similarity (np.array): Cosine similarity matrix.
-                titles (pd.Series): Series of movie titles.
-                indices (pd.Series): Series mapping titles to their indices.
+                N (int): Number of top most similar movies to recommend.
                 percentile (float): Percentile value for calculating weighted rating.
 
             Returns:
                 pd.DataFrame: Improved N most similar movies.
 
         """
-        # Use __get_recommendations to get the recommended movies
-        recommended_movies_df = ContentBasedFiltering.__get_recommendations(movies_df, movie_title, N, cos_similarity, titles, indices)
-
-        # Create a 'new_movies_df' starting from the 'recommended_movies_df', extracting only the interesting columns
-        new_movies_df = recommended_movies_df[
-            ['id', 'title', 'year', 'genres', 'vote_count', 'vote_average', 'popularity']
-        ]
-
-        # Reset the index to ensure 'title' is a regular column
-        #new_movies_df = new_movies_df.reset_index(drop=True)
-
-        # Use __top_movies_IMDB_wr_formula to improve the recommendation
-        return PopularityRanking._top_movies_IMDB_wr_formula(new_movies_df, N, percentile)
+        # Integrate columns in 'recommended_movies_df' from 'movies_df'
+        enriched_df = recommended_movies_df.merge(
+            movies_df[['id', 'genres', 'vote_count', 'vote_average', 'popularity']], 
+            on='id', 
+            how='left'
+        )
+        
+        # Use _top_movies_IMDB_wr_formula to improve the recommendation
+        return PopularityRanking._top_movies_IMDB_wr_formula(enriched_df, N, percentile)
 
     @staticmethod
     def __get_director(crew_row):
@@ -284,7 +268,8 @@ class ContentBasedFiltering:
     @staticmethod
     def __filter_keywords(keyword_s, keyword_list):
         """
-            Models the keywords of a movie that are not present in 'keyword_s' and returns the other ones.
+            Models the keywords of a movie that are not present in 'keyword_s' and returns the 
+            other ones.
 
             Parameters:
                 keyword_s (pd.Series): Movie keywords.

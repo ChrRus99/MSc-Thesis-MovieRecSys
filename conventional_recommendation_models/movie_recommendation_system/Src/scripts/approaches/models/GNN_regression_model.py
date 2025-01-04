@@ -33,12 +33,12 @@ class GNNEncoderInterface(torch.nn.Module, ABC):
     """
         Graph Neural Network (GNN) Encoder Interface.
 
-        This interface defines a GNN model for learning enriched node representations from the surrounding sub-graphs,
-        which can be then used to derive edge-level predictions.
+        This interface defines a GNN model for learning enriched node representations from the 
+        surrounding sub-graphs, which can be then used to derive edge-level predictions.
 
-        For defining our heterogeneous GNN, it makes use of PyTorch Geometric's nn.<TypeConv> layers and the
-        nn.to_hetero() function. The to_hetero() function transforms a GNN defined on homogeneous graphs to be applied
-        on heterogeneous ones.
+        For defining our heterogeneous GNN, it makes use of PyTorch Geometric's nn.<TypeConv> layers
+        and the nn.to_hetero() function. The to_hetero() function transforms a GNN defined on
+        homogeneous graphs to be applied on heterogeneous ones.
 
         Args:
             hidden_channels (int): Number of hidden channels in the GCN layers.
@@ -94,7 +94,8 @@ class GraphSAGEEncoder(GNNEncoderInterface):
     """
         GraphSAGE Network Encoder.
 
-        This class defines a GraphSAGE Network Encoder with two message passing layers for the encoding.
+        This class defines a GraphSAGE Network Encoder with two message passing layers for the 
+        encoding.
 
         Args:
             hidden_channels (int): Number of hidden channels in the SAGEConv layers.
@@ -174,7 +175,8 @@ class EdgeDecoder(torch.nn.Module):
     """
         Edge Regression Decoder.
 
-        This class defines an Edge Regression Decoder for predicting the rating for the encoded user-movie combination.
+        This class defines an Edge Regression Decoder for predicting the rating for the encoded
+        user-movie combination.
 
         Args:
             hidden_channels (int): Number of hidden channels.
@@ -195,7 +197,8 @@ class EdgeDecoder(torch.nn.Module):
 
             Args:
                 z_dict (dict): Dictionary containing edge embeddings.
-                edge_label_index (tuple): Tuple containing row and column index of the edge to do regression about.
+                edge_label_index (tuple): Tuple containing row and column index of the edge to do 
+                                          regression about.
 
             Returns:
                 torch.Tensor: Predicted edge rating.
@@ -212,12 +215,13 @@ class Model(torch.nn.Module):
     """
         Graph Auto-Encoder (GAE) Edge Regression Model.
 
-        This class defines a Graph Auto-Encoder (GAE) edge regression model for the MovieLens Heterogeneous Graph
-        Dataset.
+        This class defines a Graph Auto-Encoder (GAE) edge regression model for the MovieLens 
+        Heterogeneous Graph Dataset.
 
         Args:
             dataset (your_dataset): The MovieLens Heterogeneous Graph Dataset.
-            gnn_encoder (GNNEncoderInterface): The specific type of GNN encoder for learning graph representations.
+            gnn_encoder (GNNEncoderInterface): The specific type of GNN encoder for learning graph 
+                                               representations.
 
         Attributes:
             encoder (torch_geometric.nn.conv.to_hetero): Heterogeneous GNN encoder.

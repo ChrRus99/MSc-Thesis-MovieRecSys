@@ -48,21 +48,6 @@ class TabularDatasetHandler:
         """
         return copy.deepcopy(self.__movies_df)
 
-    def get_small_movies_df_deepcopy(self):
-        """
-            Returns a deep copy of a subset of movies DataFrame containing only those with valid 'tmdbId' and rated by
-            at least one user.
-
-            Returns:
-                pd.DataFrame: A deep copy of the subset of movies DataFrame.
-        """
-        # Discard the movies that have no 'tmdbId'
-        new_links_df = self.__links_df[self.__links_df['tmdbId'].notnull()]['tmdbId'].astype('int')
-
-        # Discard all movies that are not rated by any user
-        small_movies_df = self.__movies_df[self.__movies_df['id'].isin(new_links_df)]
-        return small_movies_df
-
     def get_links_df_deepcopy(self):
         """
             Returns a deep copy of the links DataFrame.
@@ -90,6 +75,32 @@ class TabularDatasetHandler:
         """
         return copy.deepcopy(self.__keywords_df)
 
+    def get_valid_ratings(self):
+        """
+            Extracts and returns only the ratings in 'users_ratings_df' for movies that are present
+            in the 'movies_df'.
+
+            Returns:
+                pd.DataFrame: A DataFrame containing only the valid ratings.
+        """
+        # Filter ratings to include only those with movieId present in movies_df
+        valid_ratings_df = self.__users_ratings_df[self.__users_ratings_df['movieId'].isin(self.__movies_df['id'])]
+        return valid_ratings_df
+
+    def get_rated_movies_df(self):
+        """
+            Extracts and returns only the movies that have been rated by users.
+
+            Returns:
+                pd.DataFrame: A DataFrame containing only the rated movies.
+        """
+        # Get valid ratings
+        filtered_users_ratings_df = self.get_valid_ratings()
+
+        # Merge valid ratings with movies_df to get rated movies
+        rated_movies_df = filtered_users_ratings_df.merge(self.__movies_df, left_on='movieId', right_on='id')
+        return rated_movies_df
+
     def load_datasets(self):
         """
             Load the datasets.
@@ -109,7 +120,8 @@ class TabularDatasetHandler:
         """
             Preprocesses the loaded datasets.
 
-            This method should be called after loading the datasets to perform necessary preprocessing steps.
+            This method should be called after loading the datasets to perform necessary 
+            preprocessing steps.
         """
         preprocessor = self.__DatasetPreprocessor(
             self.__users_ratings_df,
@@ -155,7 +167,8 @@ class TabularDatasetHandler:
     @staticmethod
     def load_preprocessed_tabular_datasets(path: str):
         """
-            Loads all datasets from the given directory and returns a new TabularDatasetHandler instance.
+            Loads all datasets from the given directory and returns a new TabularDatasetHandler 
+            instance.
 
             Parameters:
                 path (str): The directory path to load the datasets from.
@@ -184,9 +197,9 @@ class TabularDatasetHandler:
 
         return handler
 
-    def save_instance(self, filepath):
+    def store_class_instance(self, filepath):
         """
-            Saves the entire class instance to a .pkl file.
+            Store the entire class instance to a .pkl file.
 
             Args:
                 filepath (str): Path to the .pkl file where the instance will be saved.
@@ -198,7 +211,7 @@ class TabularDatasetHandler:
             pickle.dump(self, f)
 
     @staticmethod
-    def load_instance(filepath):
+    def load_class_instance(filepath):
         """
             Loads a class instance from a .pkl file.
 
@@ -224,7 +237,8 @@ class TabularDatasetHandler:
                 Loads datasets from the specified data path.
 
                 Returns:
-                    Tuple: A tuple containing DataFrames for users_ratings, movies, links, credits, and keywords.
+                    Tuple: A tuple containing DataFrames for users_ratings, movies, links, credits, 
+                           and keywords.
             """
             # Data paths
             users_ratings_data_path = os.path.join(self.__data_path, "ratings_small.csv")   # "ratings.csv" --> non fitta in memoria
@@ -277,6 +291,26 @@ class TabularDatasetHandler:
             """
                 Preprocesses the movies DataFrame.
             """
+            # Remove bad 'id'
+            self.movies_df = self.movies_df.drop([19730, 29503, 35587])
+
+            # Drop duplicates based on the 'id' column
+            self.movies_df = self.movies_df.drop_duplicates(subset='id')
+
+            # Process the 'id' column
+            self.movies_df['id'] = pd.to_numeric(   # Handle non-numeric values by converting them to NaN
+                self.movies_df['id'],
+                errors='coerce'
+            )
+            self.movies_df = self.movies_df.dropna( # Drop rows with NaN values in the 'id' column
+                subset=['id']
+            )
+            self.movies_df['id'] = self.movies_df['id'].astype('int')
+
+            # Process the 'title' column: substitute NaN and empty titles with the corresponding 'original_title'
+            invalid_titles_df = self.movies_df[self.movies_df['title'].isnull() | (self.movies_df['title'] == '')]
+            self.movies_df.loc[invalid_titles_df.index, 'title'] = invalid_titles_df['original_title']
+
             # Process the 'genres' column
             self.movies_df['genres'] = (self.movies_df['genres']
                 .fillna('[]')
@@ -288,19 +322,6 @@ class TabularDatasetHandler:
             self.movies_df['year'] = (pd.to_datetime(self.movies_df['release_date'], errors='coerce')
                 .apply(lambda date: str(date).split('-')[0] if date != np.nan else np.nan)
             )
-
-            # Remove bad 'id'
-            self.movies_df = self.movies_df.drop([19730, 29503, 35587])
-
-            # Process the 'id' column
-            self.movies_df['id'] = pd.to_numeric(   # Handle non-numeric values by converting them to NaN
-                self.movies_df['id'],
-                errors='coerce'
-            )
-            self.movies_df = self.movies_df.dropna( # Drop rows with NaN values in the 'id' column
-                subset=['id']
-            )
-            self.movies_df['id'] = self.movies_df['id'].astype('int')
 
             # Process the 'production_companies' column
             self.movies_df['production_companies'] = (self.movies_df['production_companies']

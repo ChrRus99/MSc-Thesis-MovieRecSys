@@ -12,8 +12,8 @@ class PopularityRanking:
         PopularityRanking - Movie Recommendation System Based on Popularity Rankings.
 
         This class implements a simple movie recommendation system based on popularity rankings.
-        It provides methods to retrieve the top movies according to IMDB's weighted rating formula and the top movies
-        for a specific genre.
+        It provides methods to retrieve the top movies according to IMDB's weighted rating formula 
+        and the top movies for a specific genre.
 
     """
 
@@ -25,7 +25,7 @@ class PopularityRanking:
             Therefore, this function does not provide personalized recommendations based on the user.
 
             Parameters:
-                tabular_dataset_handler (TabularDatasetHandler): An instance of the DatasetHandler class.
+                tabular_dataset_handler (TabularDatasetHandler): An instance of DatasetHandler.
                 N (int): The number of top movies to recommend.
 
             Returns:
@@ -40,25 +40,27 @@ class PopularityRanking:
     @staticmethod
     def top_movies_for_genre(tabular_dataset_handler, genre, N):
         """
-            Returns the top N most popular movies of the specified genre according to IMDB's weighted rating formula.
+            Returns the top N most popular movies of the specified genre according to IMDB's 
+            weighted rating formula.
 
             Therefore, this function does not provide personalized recommendations based on the user.
 
             Parameters:
-                tabular_dataset_handler (TabularDatasetHandler): An instance of the DatasetHandler class.
+                tabular_dataset_handler (TabularDatasetHandler): An instance of DatasetHandler.
                 genre (str): The genre of the recommended movies.
                 N (int): The number of top movies to recommend for the specified genre.
 
             Returns:
-                pd.DataFrame: The top N movies of the specified genre based on IMDB's weighted rating ('wr').
+                pd.DataFrame: The top N movies of the specified genre based on IMDB's weighted 
+                rating ('wr').
         """
 
         # Initialize a brand-new copy of the 'movies_df'
         movies_df = tabular_dataset_handler.get_movies_df_deepcopy()
 
-        # Create a new 'genre_movies_df' dataframe equivalent to the 'movies_df', where each movie record is replicated
-        # m times, with m = number of movie's genre, in such a way to have only one of genre for each replicated record
-        # of that movie
+        # Create a new 'genre_movies_df' dataframe equivalent to the 'movies_df', where each movie 
+        # record is replicated m times, with m = number of movie's genre, in such a way to have only
+        # one of genre for each replicated record of that movie
         genres_s = movies_df \
             .apply(lambda row: pd.Series(row['genres']), axis=1) \
             .stack() \
