@@ -54,8 +54,8 @@ class HeterogeneousGraphDatasetHandler:
             __tdh (PreprocessedTDH): Preprocessed Tabular Data Handler containing users ratings and movies information.
             __movies_df (pd.DataFrame): DataFrame containing movies information.
             __users_ratings_df (pd.DataFrame): DataFrame containing users ratings for movies.
-            __unique_users_ids (pd.DataFrame): DataFrame mapping original user IDs to consecutive integers.
-            __unique_movies_ids (pd.DataFrame): DataFrame mapping original movie IDs to consecutive integers.
+            __mapped_users_ids_df (pd.DataFrame): DataFrame mapping original user IDs to consecutive integers.
+            __mapped_movies_ids_df (pd.DataFrame): DataFrame mapping original movie IDs to consecutive integers.
             __X_movies (torch.Tensor): Tensor containing movie nodes features.
             __X_users (torch.Tensor): Tensor containing user nodes features.
             __y_ratings (torch.Tensor): Tensor containing edge labels (ratings).
@@ -67,19 +67,20 @@ class HeterogeneousGraphDatasetHandler:
         # Tabular datasets
         self.__tdh = preprocessed_tdh
         self.__movies_df = self.__tdh.get_movies_df_deepcopy()
-        self.__users_ratings_df = self.__tdh.get_users_ratings_df_deepcopy()
-
-        self.__unique_users_ids = None
-        self.__unique_movies_ids = None
+        self.__users_ratings_df = self.__tdh.get_valid_ratings() #self.__tdh.get_users_ratings_df_deepcopy()
 
         # Initialize a new heterogeneous graph dataset
-        self.__data = HeteroData()
+        self.__data = HeteroData()       
 
-        # Graph features of the heterogeneous graph dataset
+        # Heterogeneous graph dataset nodes and edges data
         self.__X_movies = None
         self.__X_users = None
         self.__y_ratings = None
         self.__edge_index_user_to_movie = None
+
+        # Mapped nodes ids
+        self.__mapped_users_ids_df = None
+        self.__mapped_movies_ids_df = None
 
     @property
     def users_ratings_df(self):
@@ -90,17 +91,85 @@ class HeterogeneousGraphDatasetHandler:
         return self.__movies_df
 
     @property
-    def unique_users_ids(self):
-        return self.__unique_users_ids
+    def mapped_users_ids_df(self):
+        return self.__mapped_users_ids_df
 
     @property
-    def unique_movies_ids(self):
-        return self.__unique_movies_ids
+    def mapped_movies_ids_df(self):
+        return self.__mapped_movies_ids_df
 
-    # TODO: da sistemare
-    def add_users_ratings_data(self, new_ratings_df: pd.DataFrame):
+    def add_new_movies(self, new_movies_df):
         """
-            Adds new user ratings data to the existing tabular dataset.
+            Adds new movies to the graph dataset.
+
+            This function takes a DataFrame of new movies and updates the internal dataset by adding
+            the new movie nodes and their features. 
+            
+            Notes: 
+                - After storing the new movies, this function rebuild the graph dataset from scratch
+                  using the function 'build_graph_dataset'. 
+                - Notice that (unlike user's ratings in the function 'add_new_users_ratings'), here
+                  it is not possible to just update the movie nodes, and this is due to the one-hot
+                  encoding procedure used in the movie node features construction which would cause 
+                  feature size inconsistencies.
+
+            Parameters:
+                new_movies_df (pd.DataFrame): A DataFrame containing the new movies to be added.
+
+            Returns:
+                None
+        """
+        # Extract the ids of the new movies to store
+        all_new_movies_ids = new_movies_df["id"].to_list()
+
+        # Filter out movies that are already in the dataset
+        new_movies_df = new_movies_df[~new_movies_df['id'].isin(self.__movies_df['id'])]
+        
+        # Extract the ids of the filtered new movies to store
+        filtered_new_movies_ids = new_movies_df["id"].to_list()
+
+        # If all movies are already present in 'movies_df' do nothing and return
+        if len(filtered_new_movies_ids) == 0:
+            print(f"No movie added: Movies ids {all_new_movies_ids} are all already present in 'movies_df'.")
+            return
+        
+        print(f"Found {len(filtered_new_movies_ids)} new movies to add to 'movies_df': Movies ids {filtered_new_movies_ids}")
+
+        # Update 'movies_df' by appending the new movies to the existing ones
+        self.__movies_df = pd.concat([self.__movies_df, new_movies_df])
+
+        # Note: we cannot just update movie nodes because to build their features we use one-hot encoding,
+        # hence new features would have different feature sizes, thus causing inconsistencies!
+        """
+        # Build features for the new movies
+        self.__build_movie_nodes_features(new_movies_df)
+        
+        # Update the indices for user and movie nodes
+        self.__build_user_and_movie_nodes_indices(None, new_movies_df)
+
+        # Update the graph dataset with new movie nodes
+        self.__data['movie'].node_id = torch.tensor(self.__mapped_movies_ids_df['mappedMovieId'].to_list())
+        self.__data['movie'].x = self.__X_movies
+        """
+
+        # The only way is to rebuild the whole graph dataset (with updated 'movies_df')
+        self.build_graph_dataset()
+        
+    def add_new_users_ratings(self, new_ratings_df: pd.DataFrame):
+        """
+            Adds new user ratings to the graph dataset.
+
+            This function updates the graph dataset with new user ratings, ensuring that only 
+            ratings for movies in 'movies_df' are considered. It also updates user nodes, movie 
+            nodes, and the edges between them in the graph.
+
+            Notes:
+                - The function concatenates the new ratings with the existing user ratings.
+                - It filters out ratings for movies that do not exist in 'movies_df'.
+                - It ensures that only new unique ratings are added.
+                - It updates user nodes features, user and movie nodes indices, and edges indices 
+                  and labels.
+                - Finally, it updates the internal graph data structure with the new nodes and edges.
 
             Parameters:
                 new_ratings_df (pd.DataFrame): New user ratings DataFrame to be added.
@@ -108,7 +177,54 @@ class HeterogeneousGraphDatasetHandler:
             Returns:
                 None
         """
-        self.__users_ratings_df = pd.concat([self.__users_ratings_df, pd.DataFrame.from_records(new_ratings_df)])
+        # Check whether the graph has been initialized
+        if (self.__mapped_users_ids_df is None) or (self.__mapped_movies_ids_df is None):
+            print("The graph has not yet been initialized.")
+            print("You need to build the graph by calling the function 'build_graph_dataset' first")
+            return
+
+        # Filter new ratings to include only those movies are in 'movies_df'
+        new_ratings_df = new_ratings_df[new_ratings_df['movieId'].isin(self.__movies_df['id'])]
+
+        # Filter new ratings to include only those that are not already in the dataset
+        existing_ratings = self.__users_ratings_df[['userId', 'movieId']].drop_duplicates()
+        existing_ratings = existing_ratings[existing_ratings['movieId'].isin(self.__movies_df['id'])]
+
+        new_ratings_df = new_ratings_df.merge(existing_ratings, on=['userId', 'movieId'], how='left', indicator=True)
+        new_ratings_df = new_ratings_df[new_ratings_df['_merge'] == 'left_only'].drop('_merge', axis=1)
+
+        # Extract the number of filtered new ratings to store
+        num_filtered_new_ratings = new_ratings_df.shape[0]
+
+        # If all (user, movie) ratings are already present in 'users_ratings_df' do nothing and return
+        if num_filtered_new_ratings == 0:
+            print("No ratings added: All (user, movie) ratings are already present in 'users_ratings_df'.")
+            print("Re-build the graph with the function 'build_graph_dataset' if you want to update those ratings.")
+            return
+
+        print(f"Found {num_filtered_new_ratings} new ratings to add to 'users_ratings_df'")
+
+        # Update 'users_ratings_df' by appending the new ratings to the existing ones
+        self.__users_ratings_df = pd.concat([self.__users_ratings_df, new_ratings_df])
+
+        # Build features and indices for new user nodes and edges
+        self.__build_user_nodes_features(new_ratings_df)
+        self.__build_user_and_movie_nodes_indices(new_ratings_df, None)
+        self.__build_edges_indices_and_labels(new_ratings_df)
+
+        # Update self.__data with new user nodes and edges
+        self.__data['user'].x = self.__X_users
+        self.__data['user'].node_id = torch.tensor(self.__mapped_users_ids_df['mappedUserId'].to_list())
+        self.__data['user', 'rating', 'movie'].edge_index = self.__edge_index_user_to_movie
+        self.__data['user', 'rating', 'movie'].edge_label = self.__y_ratings
+        self.__data['user', 'movie'].y = self.__y_ratings
+
+        # Re-build reverse edges from scratch
+        reverse_edge_type = ('movie', 'rev_rating', 'user')
+        if reverse_edge_type in self.__data.edge_types:
+            del self.__data[reverse_edge_type]
+
+        self.__data = T.ToUndirected()(self.__data)
 
     def build_graph_dataset(self):
         """
@@ -118,15 +234,18 @@ class HeterogeneousGraphDatasetHandler:
             Returns:
                 None
         """
-        # Build the heterogeneous graph dataset: nodes features and indixes, edges labels and indixes
-        self.__build_movie_nodes_features()
-        self.__build_user_nodes_features()
-        self.__build_user_and_movie_nodes_indices()
-        self.__build_edges_indices_and_labels()
+        # Reset the heterogeneous graph dataset (this is useful to re-build the graph dataset from scratch each time)
+        self.__reset_graph_dataset()
 
-        # Save node indices 
-        self.__data['user'].node_id = torch.tensor(self.__unique_users_ids['mappedUserId'].to_list())
-        self.__data['movie'].node_id = torch.tensor(self.__unique_movies_ids['mappedMovieId'].to_list())
+        # Build the heterogeneous graph dataset: nodes features and indixes, edges labels and indixes
+        self.__build_movie_nodes_features(self.__movies_df)
+        self.__build_user_nodes_features(self.__users_ratings_df)
+        self.__build_user_and_movie_nodes_indices(self.__users_ratings_df, self.__movies_df)
+        self.__build_edges_indices_and_labels(self.__users_ratings_df)
+
+        # Save node mapped indices 
+        self.__data['user'].node_id = torch.tensor(self.__mapped_users_ids_df['mappedUserId'].to_list())
+        self.__data['movie'].node_id = torch.tensor(self.__mapped_movies_ids_df['mappedMovieId'].to_list())
 
         # Add the nodes features to the heterogeneous graph dataset
         self.__data['user'].x = self.__X_users  # dim = [num_users, num_features_users]
@@ -136,27 +255,24 @@ class HeterogeneousGraphDatasetHandler:
         self.__data['user', 'rating', 'movie'].edge_index = self.__edge_index_user_to_movie  # dim = [2, num_ratings]
         # edge_type = [source='user', type='rating', destination='movie'] is the user-movie edge
 
-        # Add the edge rating labels to the heterogeneous graph dataset
+        # Add edge labels to the heterogeneous graph dataset
         self.__data['user', 'rating', 'movie'].edge_label = self.__y_ratings
         self.__data['user', 'movie'].y = self.__y_ratings
 
-        # Add the reverse edges from movies to users the heterogeneous graph dataset.
+        # Make the heterogeneous graph dataset bidirectional by adding the reverse edges from movies to users
         # In this a way the GNN will be able to pass messages in both directions.
         self.__data = T.ToUndirected()(self.__data)
         # edge_type = [source='movie', type='rev_rating', destination='user'] is the movie-user edge
-
-        # Remove the reverse edges from the heterogeneous graph dataset
-        #del self.__data['movie', 'rev_rating', 'user'].edge_label
 
         # out = [model(data.X_dict, data.edge_index_dict)]
 
         """
         # Debugging print mappings
         print("Mapped Users IDs:")
-        print(self.__unique_users_ids.head())
+        print(self.__mapped_users_ids_df.head())
 
         print("Mapped Movies IDs:")
-        print(self.__unique_movies_ids.head())
+        print(self.__mapped_movies_ids_df.head())
 
         print("Mapped Users in Graph Dataset:")
         print(self.__data["user"].node_id)
@@ -285,9 +401,12 @@ class HeterogeneousGraphDatasetHandler:
         nx.draw(G, pos, with_labels=with_labels, font_weight='bold', node_color=node_colors, edge_color=edge_colors)
         plt.show()
 
-    def __build_movie_nodes_features(self):
+    def __build_movie_nodes_features(self, movies_df):
         """
             Constructs movie node features from tabular movies_df.
+
+            Parameters:
+                movies_df (pd.DataFrame): Movies Dataframe.
 
             Returns:
                 None
@@ -296,19 +415,19 @@ class HeterogeneousGraphDatasetHandler:
         # Encode the movie titles into fixed-size vectors using the pre-trained sentence transformer model
         model = SentenceTransformer('all-MiniLM-L6-v2')
         with torch.no_grad():
-            titles = model.encode(self.__movies_df['title'].tolist(), convert_to_tensor=True, show_progress_bar=False)
+            titles = model.encode(movies_df['title'].tolist(), convert_to_tensor=True, show_progress_bar=False)
             titles = titles.cpu()
 
         # Encode the collection each movie belongs to a unique number
-        collections = self.__movies_df['belongs_to_collection'].map(
-            {collection: index for index, collection in enumerate(self.__movies_df['belongs_to_collection'].unique())}
+        collections = movies_df['belongs_to_collection'].map(
+            {collection: index for index, collection in enumerate(movies_df['belongs_to_collection'].unique())}
         ).fillna(0).astype(int).tolist()
 
         # Convert to PyTorch tensor
         collections = torch.from_numpy(np.array(collections)).view(-1, 1)
 
         # One-hot encode and merge the genres of each movie
-        genres = (self.__movies_df['genres']
+        genres = (movies_df['genres']
             .apply(lambda x: '|'.join(x) if isinstance(x, list) else None)
             .str.get_dummies('|')
             .values
@@ -318,7 +437,7 @@ class HeterogeneousGraphDatasetHandler:
         genres = torch.from_numpy(genres).to(torch.int)
 
         # One-hot encode and merge the production companies of each movie
-        production_companies = (self.__movies_df['production_companies']
+        production_companies = (movies_df['production_companies']
             .apply(lambda x: '|'.join(x) if isinstance(x, list) else None)
             .str.get_dummies('|')
             .values
@@ -333,15 +452,20 @@ class HeterogeneousGraphDatasetHandler:
         # Other tested solutions:
         # movie_features = torch.cat([titles, collections, genres], dim=-1)
         # movie_features = torch.cat([titles, genres, production_companies], dim=-1)
-        # movie_features = torch.cat([titles, collections, genres, production_companies], dim=-1)
+        # movie_features = torch.cat([titles, collections, genres, production_companies], dim=-1)       
 
+        # Store or update movie's features
         self.__X_movies = movie_features
+        #self.__X_movies = self._append_or_initialize(self.__X_movies, movie_features, dim=0)
         # X_movies.shape = [num_movie_nodes x movie_node_feature_dim]
 
-    def __build_user_nodes_features(self):
+    def __build_user_nodes_features(self, users_ratings_df):
         """
             Constructs user node features (identity matrix, since we do not have users' external 
             features).
+
+            Parameters:
+                users_ratings_df (pd.DataFrame): User ratings DataFrame.
 
             Returns:
                 None
@@ -349,11 +473,11 @@ class HeterogeneousGraphDatasetHandler:
         # We don't have user features, which is why we use an identity matrix
         user_features = torch.eye(len(self.__users_ratings_df['userId'].unique()))
 
-        # Convert PyTorch tensor
+        # Store or update user's features
         self.__X_users = user_features
         # X_users.shape = [num_users_nodes x user_node_feature_dim]
 
-    def __build_user_and_movie_nodes_indices(self):
+    def __build_user_and_movie_nodes_indices(self, users_ratings_df, movies_df):
         """
             Constructs mappings for user and movie nodes, assigning a unique index to each user to
             each movie.
@@ -362,25 +486,35 @@ class HeterogeneousGraphDatasetHandler:
             mapped to unique IDs in the graph. The user IDs are derived from the `users_ratings_df`,
             while the movie IDs are derived from `movies_df`.
 
+            Parameters:
+                users_ratings_df (pd.DataFrame): User ratings DataFrame.
+                movies_df (pd.DataFrame): Movies Dataframe.
+
             Returns:
                 None
         """
         ## GENERATE UNIQUE (USER AND MOVIE) NODE INDICES
         # Create a mapping from the userId to a unique consecutive value in the range [0, num_users]
-        self.__unique_users_ids = self.__users_ratings_df['userId'].unique()
-        self.__unique_users_ids = pd.DataFrame(data={
-            'userId': self.__unique_users_ids,
-            'mappedUserId': pd.RangeIndex(len(self.__unique_users_ids))
-        })
+        if users_ratings_df is not None:
+            last_user_index = self.__mapped_users_ids_df['mappedUserId'].max() + 1 if self.__mapped_users_ids_df is not None else 0
+            new_users_ids = users_ratings_df['userId'].unique()
+            new_users_df = pd.DataFrame(data={
+                'userId': new_users_ids,
+                'mappedUserId': pd.RangeIndex(last_user_index, last_user_index + len(new_users_ids))
+            })
+            self.__mapped_users_ids_df = self._append_or_initialize(self.__mapped_users_ids_df, new_users_df)
 
         # Create a mapping from the movieId to a unique consecutive value in the range [0, num_movies]
-        self.__unique_movies_ids = self.__movies_df['id'].unique()
-        self.__unique_movies_ids = pd.DataFrame(data={
-            'movieId': self.__unique_movies_ids,
-            'mappedMovieId': pd.RangeIndex(len(self.__unique_movies_ids))
-        })
-        
-    def __build_edges_indices_and_labels(self):
+        if movies_df is not None:
+            last_movie_index = self.__mapped_movies_ids_df['mappedMovieId'].max() + 1 if self.__mapped_movies_ids_df is not None else 0
+            new_movies_ids = movies_df['id'].unique()
+            new_movies_df = pd.DataFrame(data={
+                'movieId': new_movies_ids,
+                'mappedMovieId': pd.RangeIndex(last_movie_index, last_movie_index + len(new_movies_ids))
+            })
+            self.__mapped_movies_ids_df = self._append_or_initialize(self.__mapped_movies_ids_df, new_movies_df)
+    
+    def __build_edges_indices_and_labels(self, users_ratings_df):
         """
             Constructs and indices edges between user and movie nodes. Each edge has a user rating 
             as label.
@@ -398,27 +532,32 @@ class HeterogeneousGraphDatasetHandler:
                   of the GNN, as nodes without features can introduce noise and reduce model 
                   performance.
 
+            Parameters:
+                users_ratings_df (pd.DataFrame): User ratings DataFrame.
+
             Returns:
                 None
         """
         ## CONNECT HETEROGENEOUS NODES THROUGH EDGES
         # Merge (user and movies unique indices) mappings in the users_ratings_df
-        self.__users_ratings_df = self.__users_ratings_df.merge(self.__unique_users_ids, on='userId')
-        self.__users_ratings_df = self.__users_ratings_df.merge(self.__unique_movies_ids, on='movieId')
-
+        users_ratings_df = users_ratings_df.merge(self.__mapped_users_ids_df, on='userId').merge(self.__mapped_movies_ids_df, on='movieId')
+        
         # Create the edge_index representation in COO format, following the PyG semantics
-        self.__edge_index_user_to_movie = torch.stack([
-            torch.tensor(self.__users_ratings_df['mappedUserId'].values),
-            torch.tensor(self.__users_ratings_df['mappedMovieId'].values)
+        new_edge_index = torch.stack([
+            torch.tensor(users_ratings_df['mappedUserId'].values),
+            torch.tensor(users_ratings_df['mappedMovieId'].values)
         ], dim=0)
+
+        # Store or update user-movie edge indices
+        self.__edge_index_user_to_movie = self._append_or_initialize(self.__edge_index_user_to_movie, new_edge_index, dim=1)
         # edge_index_user_to_movie.shape = [2, num_ratings]
 
         ## BUILD EDGE LABELS (= RATINGS OF RATED MOVIES)
-        # Extract the labels: the ratings (which are the edges features)
-        ratings = self.__users_ratings_df['rating'].values
+        # Build edge labels: users ratings (which are the edges features)
+        new_ratings = torch.from_numpy(users_ratings_df['rating'].values).to(torch.float)
 
-        # Convert edge labels in PyTorch tensor
-        self.__y_ratings = torch.from_numpy(ratings).to(torch.float)
+        # Store or update user-movie edge labels
+        self.__y_ratings = self._append_or_initialize(self.__y_ratings, new_ratings, dim=0)
         # y_ratings.shape = [num_ratings] = [tot_num_of_edges]
 
         """
@@ -426,3 +565,38 @@ class HeterogeneousGraphDatasetHandler:
         print("Edge Labels (y_ratings):", self.__y_ratings)
         print("Edge Index (user-movie):", self.__edge_index_user_to_movie)
         """
+
+    def __reset_graph_dataset(self):
+        """
+            Resets all internal attributes to their initial state.
+        """
+        self.__data = HeteroData()
+        
+        self.__X_movies = None
+        self.__X_users = None
+        self.__y_ratings = None
+        self.__edge_index_user_to_movie = None
+
+        self.__mapped_users_ids_df = None
+        self.__mapped_movies_ids_df = None
+
+    def _append_or_initialize(self, existing, new, dim=None):
+        """
+            Appends new data to existing data, or initializes it if it doesn't exist.
+
+            Parameters:
+                existing (Union[torch.Tensor, pd.DataFrame]): The existing data.
+                new (Union[torch.Tensor, pd.DataFrame]): The new data to be added.
+                dim (Optional[int]): The dimension along which to concatenate (only used for tensors).
+
+            Returns:
+                Union[torch.Tensor, pd.DataFrame]: The updated data.
+        """
+        if existing is None:
+            return new
+        if isinstance(existing, torch.Tensor) and isinstance(new, torch.Tensor):
+            return torch.cat([existing, new], dim=dim)
+        elif isinstance(existing, pd.DataFrame) and isinstance(new, pd.DataFrame):
+            return pd.concat([existing, new], ignore_index=True)
+        else:
+            raise TypeError("Both inputs must be of the same type (either Tensor or DataFrame).")

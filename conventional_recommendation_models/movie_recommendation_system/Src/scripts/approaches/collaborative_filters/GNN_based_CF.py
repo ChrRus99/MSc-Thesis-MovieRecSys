@@ -58,7 +58,12 @@ class GNN_Based_CollaborativeFilter(CollaborativeFilteringInterface):
             __tensorboard_path (str): The path for storing TensorBoard logs.
     """
 
-    def __init__(self, graph_dataset_handler: HeterogeneousGraphDatasetHandler, gnn_encoder: GNNEncoderInterface):
+    def __init__(
+        self,
+        graph_dataset_handler: HeterogeneousGraphDatasetHandler,
+        gnn_encoder: GNNEncoderInterface,
+        trained_models_path: str
+    ):
         super().__init__()
 
         # Get the heterogeneous graph dataset
@@ -78,7 +83,7 @@ class GNN_Based_CollaborativeFilter(CollaborativeFilteringInterface):
         self.__device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         # Model storage settings
-        self.__trained_models_path = "..\\Src\\trained_models"
+        self.__trained_models_path = trained_models_path
         self.__tensorboard_path = os.path.join(self.__trained_models_path, "runs")
 
     @overrides
@@ -196,7 +201,7 @@ class GNN_Based_CollaborativeFilter(CollaborativeFilteringInterface):
         model_name = self.__gnn.model_name + "_based_model_.pkl"
         model_filepath = os.path.join(self.__trained_models_path, model_name)
         torch.save(self._model, model_filepath)
-        print(f'\nTrained model {self.__gnn.model_name} saved')
+        print(f'\nTrained model {self.__gnn.model_name} saved at: {self.__trained_models_path}')
 
     @overrides
     def evaluate_performance(self):
@@ -250,8 +255,8 @@ class GNN_Based_CollaborativeFilter(CollaborativeFilteringInterface):
                 Tuple containing the predicted rating and the ground truth rating.
         """
         # Map user and movie IDs (of the tabular dataset) to their corresponding indices in the graph dataset
-        mapped_user_id = self.__gdh.unique_users_ids[self.__gdh.unique_users_ids['userId'] == user_id]['mappedUserId'].item()
-        mapped_movie_id = self.__gdh.unique_movies_ids[self.__gdh.unique_movies_ids['movieId'] == movie_id]['mappedMovieId'].item()
+        mapped_user_id = self.__gdh.mapped_users_ids_df[self.__gdh.mapped_users_ids_df['userId'] == user_id]['mappedUserId'].item()
+        mapped_movie_id = self.__gdh.mapped_movies_ids_df[self.__gdh.mapped_movies_ids_df['movieId'] == movie_id]['mappedMovieId'].item()
 
         # Create edge_label_index for the given user and movie
         edge_label_index = (
@@ -301,16 +306,16 @@ class GNN_Based_CollaborativeFilter(CollaborativeFilteringInterface):
         # Upload some (updated) useful data from the graph dataset
         users_ratings_df = self.__gdh.users_ratings_df
         movies_df = self.__gdh.movies_df.rename(columns={'id': 'movieId'}, inplace=False)
-        unique_users_ids = self.__gdh.unique_users_ids
-        unique_movies_ids = self.__gdh.unique_movies_ids
-
-        # Extract the mapped user id value
-        mapped_user_id = unique_users_ids[unique_users_ids['userId'] == user_id]['mappedUserId'].values[0]
+        mapped_users_ids_df = self.__gdh.mapped_users_ids_df
+        mapped_movies_ids_df = self.__gdh.mapped_movies_ids_df
 
         # Select movies that user has not seen before
-        movies_rated = users_ratings_df[users_ratings_df['mappedUserId'] == mapped_user_id]
+        movies_rated = users_ratings_df[users_ratings_df['userId'] == user_id]
         movies_not_rated = movies_df[~movies_df.index.isin(movies_rated['movieId'])]
-        movies_not_rated = movies_not_rated.merge(unique_movies_ids, on='movieId')
+        movies_not_rated = movies_not_rated.merge(mapped_movies_ids_df, on='movieId')
+
+        # Extract the mapped user id value
+        mapped_user_id = mapped_users_ids_df[mapped_users_ids_df['userId'] == user_id]['mappedUserId'].values[0]
 
         # Select a sample movie from the set of 'movies_not_rated'
         movie = movies_not_rated.sample(1)

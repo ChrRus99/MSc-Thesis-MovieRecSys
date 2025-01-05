@@ -9,6 +9,7 @@ from surprise.model_selection import train_test_split
 from surprise import accuracy
 
 # My scripts
+from Src.scripts.data.tabular_dataset_handler import TabularDatasetHandler
 from Src.scripts.approaches.filters.collaborative_filtering import CollaborativeFilteringInterface
 
 """
@@ -35,11 +36,15 @@ class SVD_Based_CollaborativeFilter(CollaborativeFilteringInterface):
             __model (surprise.prediction_algorithms.matrix_factorization.SVD): SVD model for collaborative filtering.
             __trainset (surprise.Trainset): Training set for the SVD model.
             __testset (list): Test set for evaluating the model performance.
-            __models_path (str): Path to store trained models.
+            __trained_models_path (str): Path to store trained models.
             __trained_model_filename (str): Filename of the trained SVD model.
     """
 
-    def __init__(self, tabular_dataset_handler):
+    def __init__(
+        self,
+        tabular_dataset_handler: TabularDatasetHandler,
+        trained_models_path: str
+    ):
         super().__init__()
 
         # Initialize some brand-new copies of the required dataframes from dataset
@@ -57,7 +62,7 @@ class SVD_Based_CollaborativeFilter(CollaborativeFilteringInterface):
         self.__testset = None
 
         # Model storage settings
-        self.__models_path = "..\\Src\\trained_models"
+        self.__trained_models_path = trained_models_path
         self.__trained_model_filename = None
 
     @overrides
@@ -76,7 +81,7 @@ class SVD_Based_CollaborativeFilter(CollaborativeFilteringInterface):
 
         # Store the trained model
         model_filename = "SVD_model.pkl"
-        self.__trained_model_filename = os.path.join(self.__models_path, model_filename)
+        self.__trained_model_filename = os.path.join(self.__trained_models_path, model_filename)
         dump.dump(self.__trained_model_filename, algo=self.__model)
 
         # Save the test set for later evaluation
@@ -116,7 +121,7 @@ class SVD_Based_CollaborativeFilter(CollaborativeFilteringInterface):
 
         # Store the trained model
         model_filename = "SVD_with_cross_validation_model.pkl"
-        self.__trained_model_filename = os.path.join(self.__models_path, model_filename)
+        self.__trained_model_filename = os.path.join(self.__trained_models_path, model_filename)
         dump.dump(self.__trained_model_filename, algo=self.__model)
 
     def evaluate_performance_with_cross_validation(self):
