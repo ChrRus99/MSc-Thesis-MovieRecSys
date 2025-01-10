@@ -120,7 +120,7 @@ class TabularDatasetHandler:
         """
             Preprocesses the loaded datasets.
 
-            This method should be called after loading the datasets to perform necessary 
+            This function should be called after loading the datasets to perform necessary 
             preprocessing steps.
         """
         preprocessor = self.__DatasetPreprocessor(
@@ -297,6 +297,9 @@ class TabularDatasetHandler:
             # Drop duplicates based on the 'id' column
             self.movies_df = self.movies_df.drop_duplicates(subset='id')
 
+            # Drop columns 'imdb_id', 'poster_path', 'video'
+            self.movies_df = self.movies_df.drop(columns=['imdb_id', 'poster_path', 'video'])
+
             # Process the 'id' column
             self.movies_df['id'] = pd.to_numeric(   # Handle non-numeric values by converting them to NaN
                 self.movies_df['id'],
@@ -361,9 +364,40 @@ class TabularDatasetHandler:
             # Process the 'id' column
             self.credits_df['id'] = self.credits_df['id'].astype('int')
 
+            # Process 'cast' and 'crew' columns
+            self.credits_df['cast'] = self.credits_df['cast'].apply(ast.literal_eval)
+            self.credits_df['crew'] = self.credits_df['crew'].apply(ast.literal_eval)
+
+            # Process 'cast' column to extract only relevant data
+            self.credits_df['cast'] = self.credits_df['cast'].apply(
+                lambda cast_list: [
+                    {'character': x['character'], 'name': x['name']}
+                    for x in cast_list
+                ] if isinstance(cast_list, list) else None
+            )
+            
+            # Process 'crew' column to extract only relevant data
+            self.credits_df['crew'] = self.credits_df["crew"].apply(
+                lambda crew_list: [
+                    {'department': x['department'], 'job': x['job'], 'name': x['name']}
+                    for x in crew_list
+                ] if isinstance(crew_list, list) else None
+            )
+
         def __preprocess_keywords_df(self):
             """
                 Preprocesses the keywords DataFrame.
             """
             # Process the 'id' column
             self.keywords_df['id'] = self.keywords_df['id'].astype('int')
+
+            # Process 'keywords' columns
+            self.keywords_df['keywords'] = self.keywords_df['keywords'].apply(ast.literal_eval)
+
+            # Process the 'keywords' column, for extracting only the names of the keywords
+            self.keywords_df['keywords'] = self.keywords_df['keywords'].apply(
+                lambda keyword_row: [
+                    {'name': x['name']}
+                    for x in keyword_row
+                ] if isinstance(keyword_row, list) else []
+            )

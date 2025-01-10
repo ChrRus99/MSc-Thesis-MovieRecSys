@@ -355,7 +355,7 @@ class GNN_Based_CollaborativeFilter(CollaborativeFilteringInterface):
                 truth ratings.
         """
         # Extract movie IDs from the subset DataFrame
-        movie_ids = subset_movies_df['movieId'].tolist()
+        movie_ids = subset_movies_df['id'].tolist()
 
         # Initialize lists to store predictions and ground truth ratings
         predicted_ratings = []

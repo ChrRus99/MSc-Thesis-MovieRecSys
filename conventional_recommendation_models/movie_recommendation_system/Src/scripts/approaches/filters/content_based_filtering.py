@@ -35,7 +35,7 @@ class ContentBasedFiltering:
             Recommends the N top most similar movies to the target movie based on movie descriptions
             and taglines.
 
-            Therefore, this function does not provide personalized recommendations based on the user.
+            This function DOES NOT provide personalized recommendations based on the user.
 
             Parameters:
                 tabular_dataset_handler (TabularDatasetHandler): An instance of DatasetHandler.
@@ -92,7 +92,7 @@ class ContentBasedFiltering:
             Recommends the N top most similar movies to the target movie based on movie metadata 
             (cast, crew, keywords, and genre).
 
-            Therefore, this function does not provide personalized recommendations based on the user.
+            This function DOES NOT provide personalized recommendations based on the user.
 
             Parameters:
                 tabular_dataset_handler (TabularDatasetHandler): An instance of DatasetHandler.
@@ -112,11 +112,6 @@ class ContentBasedFiltering:
         # Add the columns 'cast', 'crew', 'keywords' (from the corresponding dataframes) to the 'movies_df'
         movies_df = movies_df.merge(credits_df, on='id')
         movies_df = movies_df.merge(keywords_df, on='id')
-
-        # Process 'cast' and 'keywords' columns
-        movies_df['cast'] = movies_df['cast'].apply(ast.literal_eval)
-        movies_df['crew'] = movies_df['crew'].apply(ast.literal_eval)
-        movies_df['keywords'] = movies_df['keywords'].apply(ast.literal_eval)
 
         # Add the columns 'cast_size' and 'crew_size' to the 'movies_df'
         movies_df['cast_size'] = movies_df['cast'].apply(lambda x: len(x))

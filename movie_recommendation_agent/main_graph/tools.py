@@ -19,7 +19,7 @@ def check_user_registration_tool(state: AgentState):
     Creates a tool function to check if a user is already registered.
 
     This factory function generates a tool that checks whether the user is already registered in 
-    the system, helping the greeting agent to route correctly.
+    the system, helping the greeting_and_route_query agent to route correctly.
 
     Args:
         state (AgentState): The current conversation state.

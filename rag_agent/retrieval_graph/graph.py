@@ -24,6 +24,10 @@ from retrieval_graph.configuration import AgentConfiguration
 from retrieval_graph.researcher_graph.graph import graph as researcher_graph
 from retrieval_graph.state import AgentState, InputState, Router
 from shared.utils import format_docs, load_chat_model
+from retrieval_graph.tools import (
+    retrieve_movies_info_tool,
+    retrieve_cast_and_crew_info_tool,
+)
 from shared.debug_utils import (
     state_log,
     tool_log,
@@ -334,16 +338,139 @@ async def respond_to_general_movie_question(
     model = load_chat_model(configuration.query_model)
 
     # Format the system prompt (using the router's logic) to respond to the general query
-    system_prompt = configuration.general_system_prompt.format(
-        logic=state.router["logic"]
-    )
+    # system_prompt = configuration.general_system_prompt.format(
+    #     logic=state.router["logic"]
+    # )
 
     # Combine the system prompt with the agent's conversation history
-    messages = [{"role": "system", "content": system_prompt}] + state.messages
+    #messages = [{"role": "system", "content": system_prompt}] + state.messages
 
-    # Return the response to the general query
-    response = await model.ainvoke(messages)
-    state.messages.append(response)  # Update the state
+    respond_general_question_tools = [
+        retrieve_movies_info_tool(state),
+        retrieve_cast_and_crew_info_tool(state)
+    ]
+
+    respond_general_question_assistant = create_react_agent(
+        model,
+        respond_general_question_tools,
+        state_modifier=("""
+            Answer the user question following these steps:
+            
+            Steps:
+            1. **Analyze the user question**
+            2. **Extract the target of the question and the filtering citeria from the question**
+            3. **Generate a query dictionary containing the filtering criteria to pass to the tool**
+            4. **Call the appropriate tool to retrieve the information**
+                - **`retrieve_movies_info_tool`** if the question is related to general movies information, such as year, genre, budget, collection, etc..
+                - **`retrieve_cast_and_crew_info_tool`** if the question is relative ONLY to cast, crew, characters, actors, directors, but not to general movies information. This tool is complementary to the previous one.
+            5. **Format the response message with the information retrieved from the tool**
+
+            Example 1:
+                HumanMessage: In which year was Top Gun released?
+                Question description: the user wants to know the 'year' in which the movie 'Top Gun' was released. This is a general movies information.
+                Extracted information: target: 'year', filtering: {'title': 'Top Gun'}.
+                Query dictionary: {'title': 'Top Gun'}
+                Tool Call: `retrieve_movies_info_tool` with query: {'title': 'Top Gun'}
+                AIMessage: The movie Top Gun was released in 1986.
+
+            Example 2:  
+                HumanMessage: Which is the genre of Top Gun?
+                Question description: the user wants to know the 'genre' of the movie 'Top Gun'. This is a general movies information.
+                Extracted information: target: 'genre', filtering: {'title': 'Top Gun'}.
+                Query dictionary: {'title': 'Top Gun'}
+                Tool Call: `retrieve_movies_info_tool` with query: {'title': 'Top Gun'}
+                AIMessage: Top Gun" belongs to the following genres:
+                    - Action
+                    - Romance
+                    - War
+
+            Example 3:
+                HumanMessage: "Which action movies were released in 1999 with a budget greather than 50M dollars?"
+                Question description: the user wants to know the movies with features: genre 'action', year '1999' and budget '50000000'. This is a general movies information.
+                Extracted information: target: list['titles'], filtering: {'year': 1999, 'genres': 'Action', 'budget': 50000000}.
+                Query dictionary:  {'year': 1999, 'genres': 'Action', 'budget': 50000000}
+                Tool Call: `retrieve_movies_info_tool` with query: {'year': 1999, 'genres': 'Action', 'budget': 50000000}
+                AIMessage: Here are some action movies released in 1999 with a budget greater than 50 million dollars:
+                    1. **Assassins**
+                    2. **Fair Game**
+                    3. **Broken Arrow**
+                    4. **Jade**
+                    5. **Casper**
+
+            Example 4:  
+                HumanMessage: Which is the cast of Top Gun?
+                Question description: the user wants to know which 'actors' played a role in the movie 'Top Gun'. This is a question related to the cast and the actors.
+                Extracted information: target: list['actors'], filtering: {'title': 'Top Gun'}.
+                Query dictionary: {'title': 'Top Gun'}
+                Tool Call: `retrieve_cast_and_crew_info_tool` with query: {'title': 'Top Gun'}
+                AIMessage: The cast of the movie Top Gun is composed by:
+                    1. **Tom Cruise** 
+                    2. **Val Kilmer** 
+                    3. **Kelly McGillis** 
+                    4. **Anthony Edwards** 
+                    5. **Mag Ryan** 
+
+            Example 5:  
+                HumanMessage: Which are the characters of Top Gun?
+                Question description: the user wants to know which 'characters' are present in the movie 'Top Gun'. This is a question related to the cast and the actors.
+                Extracted information: target: list['characters'], filtering: {'title': 'Top Gun'}.
+                Query dictionary: {'title': 'Top Gun'}
+                Tool Call: `retrieve_cast_and_crew_info_tool` with query: {'title': 'Top Gun'}
+                AIMessage: The movie Top Gun features the following characters and their respective actors::
+                    1. **Pete Mitchell (Maveric)** played by **Tom Cruise**  
+                    2. **Tom Kazansky (Iceman)** played by **Val Kilmer**
+                    3. **Charlotte Blackwood (Charlie)** played by **Kelly McGillis** 
+                    4. **Nick Bradshaw (Goose)** played by **Anthony Edwards** 
+                    5. **Carole Bradshaw** played by **Mag Ryan** 
+
+
+            ** IMPORTANT **: Tools take in input dictionaries.
+            """),
+    )
+
+                
+            # Example 6:
+            #     HumanMessage: Which movies were directed by Quentin Tarantino and played by Tom Hanks?
+            #     Question description: the user wants to know which 'movies' were directed by 'Quentin Tarantino' and played by 'Tom Hanks'. This is a question related to the cast and the actors.
+            #     Extracted information: target: list['titles'], filtering: {'director': 'Quentin Tarantino' 'actor', 'Tom Hanks'}.
+            #     Query dictionary: {'director': 'Quentin Tarantino' 'actor', 'Tom Hanks'}
+            #     Tool Call: `retrieve_cast_and_crew_info_tool` with query: {'director': 'Quentin Tarantino' 'actor', 'Tom Hanks'}
+            #     AIMessage: Here are the movies featuring both Quentin Tarantino and Tom Hanks:
+            #         1. **Pulp Fiction 2**
+            #         2. **Fictional Crossover**
+
+    try:
+        # Extract the last message from the response in the history of messages
+        state_messages = state.messages
+        filtered_messages = [msg for msg in state.messages if not isinstance(msg, SystemMessage)] # Filter SystemMessage's
+        last_state_message = filtered_messages[-1]
+
+        # Pass the model just the last message in the history of messages
+        temp_state = copy.deepcopy(state)
+        temp_state.messages = [last_state_message]
+
+        print("last_state_message --------> ", last_state_message.content)
+
+        response = await respond_general_question_assistant.ainvoke({"messages": [{"role": "user", "content": last_state_message.content}]})
+
+        print("response --------> ", response)
+
+        # Extract and store the last message from the response
+        response_messages = response["messages"]
+        last_response_message = response_messages[-1]
+        state.messages.append(AIMessage(content=last_response_message.content))  # Update the state
+    except Exception as e:
+        state.messages.append(SystemMessage(content=f"Error"))  # Update the state
+
+        # ERROR LOG
+        state_log(
+            function_name="respond_to_general_movie_question", 
+            state=state,
+            additional_fields={"Error": str(e)},
+            modality="error"
+        )
+
+        raise e
 
     state.router = {
         "type": "respond_to_general_movie_question", 
@@ -351,7 +478,7 @@ async def respond_to_general_movie_question(
     }
 
     return {
-        "messages": [response], 
+        "messages": state.messages, 
         "router": state.router
     }
 

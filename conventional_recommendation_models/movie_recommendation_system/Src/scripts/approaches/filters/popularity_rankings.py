@@ -22,7 +22,7 @@ class PopularityRanking:
         """
             Returns the top N most popular movies according to IMDB's weighted rating formula.
 
-            Therefore, this function does not provide personalized recommendations based on the user.
+            This function DOES NOT provide personalized recommendations based on the user.
 
             Parameters:
                 tabular_dataset_handler (TabularDatasetHandler): An instance of DatasetHandler.
@@ -43,7 +43,7 @@ class PopularityRanking:
             Returns the top N most popular movies of the specified genre according to IMDB's 
             weighted rating formula.
 
-            Therefore, this function does not provide personalized recommendations based on the user.
+            This function DOES NOT provide personalized recommendations based on the user.
 
             Parameters:
                 tabular_dataset_handler (TabularDatasetHandler): An instance of DatasetHandler.
