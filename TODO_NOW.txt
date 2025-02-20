@@ -6,10 +6,11 @@
 ------------------------------------------------------------------------------------------------
 TODO: ISTRUZIONI X QUANTO TORNO A FINE FEBBRAIO: <<<<<<<<<<------------- DA QUI
 - bisogna sistemare problema prompting per integrazione tools retrieve_movies_info_tool e retrieve_cast_and_crew_info_tool
-- bisogna creare i tool per recommendation in tools.py (già creati in NOTEBOOK 6!!!!)
-- bisogna integrare questi tools in recommendation node in rag_agent.
-- da decidere se usare planning in recommendation node (secondo me si, vedi agentic rag), 
+- bisogna creare i tool per create_recommendation_research_plan in tools.py (già creati in NOTEBOOK 6!!!!)
+- bisogna integrare questi tools in create_recommendation_research_plan node in rag_agent.
+- da decidere se usare planning in create_recommendation_research_plan node (secondo me si, vedi agentic rag), 
   ma all'inizio per semplicità fai solo nodo semplice, dopo integra sottografo researcer_graph per fare planning.
+- bisogna unire i due programmi main_graph e rag_graph nel nodo recommendation di main_graph
 - dopo fai tutta roba scritta in TODO_NOW (ossia qui sotto) e in TODO.
 - prima però sisteama tutto codice parte langgraph rifacendo i nodi in modo più ordinato (vedi TODO) e sistemando e separando prompts
 ------------------------------------------------------------------------------------------------
@@ -76,6 +77,10 @@ frontend (optional):
 ---> questo permette di ridurre la dipendenza tra moduli (decoupling) e di creare un'interfaccia comune tra essi!
 (per creare collegamento tra libreria CRM e microservice si possono creare delle classi adapter per mappare solo funzioni necessarie da usare in microservice usando CRM solo come una libreria)
 
+nota: in realtà sarebbe meglio evitare di fare chiamate SQL e Cypher ai microservices, ma piuttosto fare chiamate normali request-response (magari con query)
+in modo da ottenere direttamente come risultato dizionary di informazioni sui film o recommendations con top ranking 
+questo per nascondere completametne la parte di database all'esterno. 
+Ma questo è da decidere meglio, magari vedi come hanno definito le chiamate API per MovieLens, IMDB, ecc. e fai una cosa simile.
 
 TODO LangGraph:
 - rifare tutti nodi fatti bene separando prompt in prompt.py e creando delle catene langchain dove serve (tipo dove ci sono output strutturati)
@@ -164,3 +169,19 @@ di creare una connessione tra RAG e RecSys x tesi.
 vedi https://youtu.be/aQ4yQXeB1Ss?si=oIptL2nj_dPGU9XW molto molto importante su agentic rag!!!
 questo è alla fine quello che facciamo in questo progetto, e può essere usato come argomento comune nella tesi
 tra advanced rag e recsys!!!
+
+TODO: nel validation node un'idea potrebbe essere quella di analizare le critiche e le risposte dell'utente per estrarre informazioni
+riguardo le sue preferenze, in questo modo si mantiene in memoria un file .txt contente un report aggiornato riguardo i gusti dell'utente da usare
+passandolo al LLM come prompt nella fase di recommendation per suggerire una risposta ancora più mirata.
+(e.g., se utente menziona che non gli piacciono i film romantici o che gli piacciono i film di Tom Hanks queste informazioni possono essere 
+usate in futuro per le prossime raccomandazioni, nella fase di filtraggio)
+
+TODO OTTIMIZZAZIONE IMPORTANTE: per velocizzare la parte di recommendation, un'idea potrebbe essere quella di mantenere in memoria il pred_rating di ogni film nel movies_df
+tipo una sorta di tabella pred_ratings_df dove le colonne sono movieId, userId, pred_rating, ground_truth_rating.
+ogni volta che la rete dell'utente viene riaddestrata la colonna del pred_rating di quell'utente viene ricalcolata in maniera asincrona
+---> questo permette di evitare che i rating debbano essere calcolati al volo ogni volta, rendendo l'applicazione molto molto più veloce.
+---> in questo modo è possibile passare al modello attraverso il tool un numero di film molto più grande dopo la fase di filtraggio!!!
+per esempio la rete online e la colonna dei pred_ratings potrebbero essere ricalcolate (SE NECESSARIO) alla fine di ogni conversazione con l'utente i-esimo.
+
+TODO: ogni volta che inziamo la conversazione con un utente che è già registrato dobbiamo chiedergli se ha visto qualche film di recente e come lo valuterebbe,
+oppure se ha visto qualche film tra quelli racommandati l'ultima volta, in modo da migliorare la racommandazione.

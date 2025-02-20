@@ -8,3 +8,4 @@ other/
 bkp/
 old/
 trained_models/
+**/.env
