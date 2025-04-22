@@ -1,6 +1,0 @@
-"""
-This code is in part based on the original LangGraph RAG Research Agent Template:
-    https://github.com/langchain-ai/rag-research-agent-template/tree/main
-which was proposed by the LangGraph authors as a starter project to help getting started with 
-developing a RAG research agent using LangGraph in LangGraph Studio.
-"""

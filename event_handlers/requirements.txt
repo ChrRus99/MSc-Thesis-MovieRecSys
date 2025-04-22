@@ -1,0 +1,4 @@
+kafka_python==2.1.4
+pymongo==4.12.0
+python-dotenv==1.1.0
+Requests==2.32.3

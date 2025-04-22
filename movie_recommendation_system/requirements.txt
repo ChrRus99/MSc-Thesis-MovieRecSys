@@ -1,0 +1,13 @@
+matplotlib==3.10.0
+networkx==3.4.2
+nltk==3.9.1
+numpy==2.2.3
+overrides==7.4.0
+pandas==2.2.3
+scikit_learn==1.6.1
+scikit_surprise==1.1.4
+sentence_transformers==3.3.1
+surprise==0.1
+tensorboard==2.18.0
+torch_geometric==2.6.1
+tqdm>=4.66.6
