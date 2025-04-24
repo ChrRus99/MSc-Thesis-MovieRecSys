@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import RedirectResponse
 from pathlib import Path
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 def is_docker():
@@ -127,6 +127,7 @@ def _get_movie_id_from_title(movie_title: str) -> str:
 
 
 class User(BaseModel):
+    user_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     first_name: str
     last_name: str
     email: str
@@ -159,10 +160,10 @@ def health():
 @app.post("/users")
 async def create_user(user: User):
     """Creates a new user and returns the user ID."""
-    user_id = str(uuid.uuid4())
+    #user_id = str(uuid.uuid4())
     timestamp = int(time.time())
-    store_new_user(user_id, user.first_name, user.last_name, user.email, timestamp)
-    return {"user_id": user_id}
+    store_new_user(user.user_id, user.first_name, user.last_name, user.email, timestamp)
+    return {"user_id": user.user_id}
 
 @app.get("/users/{user_id}/exists")
 async def user_exists(user_id: str):

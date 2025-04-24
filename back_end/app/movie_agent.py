@@ -1,18 +1,18 @@
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
-from app.app_graph.graph import builder
+from app.app_graph.movie_graph.graph import builder
 
-def create_movie_recommendation_agent(with_memory: bool = False) -> CompiledStateGraph:
+def create_movie_agent(with_memory: bool = False) -> CompiledStateGraph:
     """
-    Create and compile a Movie Recommendation Agent with optional memory capabilities.
+    Create and compile a Movie Agent with optional memory capabilities.
 
     Args:
         with_memory (bool): If True, integrate a memory saver for storing and managing user memories
             during the agent's session. Defaults to False.
 
     Returns:
-        CompiledStateGraph: The compiled RAG agent ready for deployment with optional memory
+        CompiledStateGraph: The compiled Movie Agent ready for deployment with optional memory
             management.
     """
 
@@ -26,5 +26,5 @@ def create_movie_recommendation_agent(with_memory: bool = False) -> CompiledStat
         graph = builder.compile()  
 
     # Set the name of the graph for identification purposes
-    graph.name = "MainGraph"
+    graph.name = "MovieGraph"
     return graph

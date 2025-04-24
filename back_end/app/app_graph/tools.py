@@ -126,7 +126,7 @@ def register_user_tool(state: AppAgentState):
                 - dict: A dictionary containing user data.
         """
         # Extract user id from state
-        # user_id = state.user_id  # this id is wrong, we need to get it from the microservice response 
+        user_id = state.user_id
 
         # DEBUG LOG
         tool_log(
@@ -139,6 +139,7 @@ def register_user_tool(state: AppAgentState):
 
         # Generate the artifacts with user details 
         user_metadata = {
+            "user_id": user_id,
             "first_name": first_name,
             "last_name": last_name,
             "email": email
@@ -151,9 +152,14 @@ def register_user_tool(state: AppAgentState):
         PORT = os.getenv("USER_MICROSERVICE_PORT")
 
         response = requests.post(f"{BASE_URL}{PORT}/users", json=state.user_data)
-        assert response.status_code == 200, "Failed to create user"
 
-        state.user_id = response.json()["user_id"]  # Update the state (with the real user id from the microservice)
+        print(f"Response: {response.json()}")
+        print(f"Status Code: {response.status_code}")
+        print(f"user id: {response.json()["user_id"]}")
+
+        assert response.status_code == 200, "Failed to create user"
+        assert user_id == response.json()["user_id"], "User ID mismatch"
+
         state.is_user_registered = True  # Update the state
 
         # Serialize the results

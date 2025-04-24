@@ -7,7 +7,7 @@ from app.shared.state import InputState
 from app.shared.tools import make_handoff_tool
 from app.app_graph.tools import save_user_seen_movies_tool
 
-USER_PREFERENCES_SYSTEM_PROMPT = """
+USER_RATINGS_SYSTEM_PROMPT = """
 You are a preferences assistant agent in a movie recommendation system.
 Your job is to ask the user about the movies they have seen and their ratings (e.g., on a scale of 1 to 5).
 
@@ -27,9 +27,9 @@ Your job is to ask the user about the movies they have seen and their ratings (e
 {tool_names}
 """
 
-def create_user_preferences_agent(state: InputState, llm: ChatOpenAI=None) -> Runnable:
+def create_user_ratings_agent(state: InputState, llm: ChatOpenAI=None) -> Runnable:
     """
-    Creates a runnable ReAct agent specifically for collecting user movie preferences.
+    Creates a runnable ReAct agent specifically for collecting user-movie ratings.
 
     Args:
         llm (ChatOpenAI): The language model to use.
@@ -39,21 +39,21 @@ def create_user_preferences_agent(state: InputState, llm: ChatOpenAI=None) -> Ru
         Runnable: The runnable agent instance configured for preference collection tasks.
     """
     # Define the tools required for the preference collection process
-    user_preferences_tools = [
+    user_ratings_tools = [
         save_user_seen_movies_tool(state),
         make_handoff_tool(state, agent_name="recommendation"),
     ]
 
     # Define the system prompt template for the agent
-    formatted_system_prompt = USER_PREFERENCES_SYSTEM_PROMPT.format(
-        tools=render_text_description(user_preferences_tools),
-        tool_names=", ".join([t.name for t in user_preferences_tools]),
+    formatted_system_prompt = USER_RATINGS_SYSTEM_PROMPT.format(
+        tools=render_text_description(user_ratings_tools),
+        tool_names=", ".join([t.name for t in user_ratings_tools]),
     )
 
     # Create the ReAct agent runnable
     react_agent_runnable = create_react_agent(
         model=llm or ChatOpenAI(model_name="gpt-4o-mini", temperature=0),
-        tools=user_preferences_tools,
+        tools=user_ratings_tools,
         prompt=formatted_system_prompt,
     )
 

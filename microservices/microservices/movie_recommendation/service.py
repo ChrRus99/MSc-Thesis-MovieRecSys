@@ -105,18 +105,38 @@ def _filter_movies_df(movies_df, filtering_params: FilteringParams):
     Filters movies_df based on filtering_params.
     """
     filtered_df = movies_df.copy()
+    
     if filtering_params.genres:
+        # Convert input genres to lowercase
+        input_genres_lower = {genre.strip().lower() for genre in filtering_params.genres}
+        # Filter based on lowercase comparison
         filtered_df = filtered_df[filtered_df['genres'].apply(
-            lambda g: all(genre in g for genre in filtering_params.genres))]
+            lambda g_list: isinstance(g_list, list) and 
+                input_genres_lower.issubset({genre.strip().lower() for genre in g_list})
+        )]
+        
     if filtering_params.year:
+        # Filter based on year
         filtered_df = filtered_df[filtered_df['year'].astype(str) == str(filtering_params.year)]
+        
     if filtering_params.actors:
-        for actor in filtering_params.actors:
-            filtered_df = filtered_df[filtered_df['cast_list'].apply(
-            lambda a: any(x.get('name') == actor for x in a))]
+        # Convert input actors to lowercase
+        input_actors_lower = {actor.strip().lower() for actor in filtering_params.actors}
+        # Filter based on lowercase comparison within cast_list
+        filtered_df = filtered_df[filtered_df['cast_list'].apply(
+            lambda cast: isinstance(cast, list) and 
+                any(isinstance(member, dict) and member.get('name', '').strip().lower() in input_actors_lower for member in cast)
+        )]
+        
     if filtering_params.director:
+        # Convert input director to lowercase
+        input_director_lower = filtering_params.director.strip().lower()
+        # Filter based on lowercase comparison within crew_list
         filtered_df = filtered_df[filtered_df['crew_list'].apply(
-            lambda d: all(x.get('job') != 'Director' or x.get('name').strip().lower() == filtering_params.director.strip().lower() for x in d))]
+            lambda crew: isinstance(crew, list) and 
+                any(isinstance(member, dict) and member.get('job', '').strip().lower() == 'director' and member.get('name', '').strip().lower() == input_director_lower for member in crew)
+        )]
+        
     return filtered_df 
 
 

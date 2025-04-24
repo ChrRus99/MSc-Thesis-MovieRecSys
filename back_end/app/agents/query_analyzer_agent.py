@@ -40,7 +40,7 @@ def create_query_analyzer_agent(
 
     # Create the greeting agent
     greeting_agent = BaseAgent(
-        agent_name="GreetingAgent",
+        agent_name="QueryAnalyzerAgent",
         prompt=prompt,
         llm=llm or ChatOpenAI(model_name="gpt-4o-mini", temperature=0),
         tools=tools,

@@ -1,6 +1,6 @@
 import json
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from langchain_core.messages import AIMessage
 
@@ -34,3 +34,25 @@ def format_agent_structured_output(text: str) -> Optional[Dict[str, Any]]:
             print("Error: Failed to parse JSON.")
             return None
     return None  # No JSON found
+
+
+def format_prompt(prompt_template: str, params_dict: Dict[str, Any]) -> str:
+    """
+    Replaces the specified placeholders in a prompt using key-value pairs from a dictionary.
+
+    Args:
+        prompt_template (str): The prompt containing placeholders like {key}.
+        params_dict (Dict[str, Any]): A dictionary where keys are placeholder names and values are
+            the replacements.
+
+    Returns:
+        str: The prompt with specified placeholders replaced.
+    """
+    result_string = prompt_template
+
+    for key, value in params_dict.items():
+        placeholder = f"{{{key}}}"
+        # Convert value to string for replacement
+        result_string = result_string.replace(placeholder, str(value))
+    
+    return result_string

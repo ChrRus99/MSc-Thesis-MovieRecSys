@@ -116,7 +116,6 @@ def deploy_model(user_id: str, new_user_online_model_filepath: str, **kwargs):
     upload_online_user_model(model_filepath=new_user_online_model_filepath, user_id=user_id)
     print(f"[LOG] Successfully deployed model for user {user_id}")
 
-
 @task()
 def pre_compute_user_movie_ratings(user_id: str, new_user_online_model_filepath: str, **kwargs):
     """Pre-compute user-movie ratings using the newly trained model via an external script."""
@@ -157,6 +156,34 @@ def deploy_pre_computed_user_movie_ratings(user_id: str, precomputed_ratings_fil
     print(f"[LOG] Storing {len(precomputed_ratings_df)} predictions for user {user_id}.")
     store_user_movie_predictions(predictions_df=precomputed_ratings_df)
     print(f"[LOG] Successfully deployed pre-computed ratings for user {user_id}")
+
+@task()
+def cleanup_temp_files(
+    new_user_ratings_df_filepath: str,
+    old_user_online_model_filepath: str,
+    new_user_online_model_filepath: str,
+    precomputed_ratings_filepath: str,
+    **kwargs
+):
+    """Clean up temporary files created during the pipeline."""
+    print(f"[LOG] Cleaning up temporary files.")
+
+    # Clean up temporary files
+    if os.path.exists(new_user_ratings_df_filepath):
+        os.remove(new_user_ratings_df_filepath)
+        print(f"[LOG] Removed temporary ratings file: {new_user_ratings_df_filepath}")
+
+    if os.path.exists(old_user_online_model_filepath):
+        os.remove(old_user_online_model_filepath)
+        print(f"[LOG] Removed temporary old model file: {old_user_online_model_filepath}")
+
+    if os.path.exists(new_user_online_model_filepath):
+        os.remove(new_user_online_model_filepath)
+        print(f"[LOG] Removed temporary model file: {new_user_online_model_filepath}")
+    
+    if os.path.exists(precomputed_ratings_filepath):
+        os.remove(precomputed_ratings_filepath)
+        print(f"[LOG] Removed temporary pre-computed ratings file: {precomputed_ratings_filepath}")
 
 
 # --- Define the DAG ---
@@ -250,6 +277,14 @@ with DAG(
         precomputed_ratings_filepath=precomputed_ratings_filepaths
     )
 
+    # 7. Cleanup Temporary Files (expands over trained_model_filepaths and precomputed_ratings_filepaths)
+    cleanup_temp_files_task = cleanup_temp_files.expand(
+        new_user_ratings_df_filepath=loaded_ratings_filepaths,
+        old_user_online_model_filepath=loaded_model_filepaths,
+        new_user_online_model_filepath=trained_model_filepaths,
+        precomputed_ratings_filepath=precomputed_ratings_filepaths
+    )
+
     # --- End Task ---
     end = DummyOperator(task_id="end", trigger_rule="none_failed_min_one_success")
 
@@ -263,4 +298,4 @@ with DAG(
     [loaded_ratings_filepaths, loaded_model_filepaths] >> trained_model_filepaths
     trained_model_filepaths >> deployed_model_task # Branch 1
     trained_model_filepaths >> precomputed_ratings_filepaths >> deployed_ratings_task # Branch 2
-    [deployed_model_task, deployed_ratings_task] >> end
+    [deployed_model_task, deployed_ratings_task] >> cleanup_temp_files_task >>end

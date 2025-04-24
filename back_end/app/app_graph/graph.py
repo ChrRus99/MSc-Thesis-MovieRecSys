@@ -21,7 +21,7 @@ from app.app_graph.state import AppAgentState
 from app.agents.greeting_agent import create_greeting_agent
 from app.agents.sign_up_agent import create_sign_up_agent
 from app.agents.sign_in_agent import create_sign_in_agent
-from app.agents.user_preferences_agent import create_user_preferences_agent
+from app.agents.user_ratings_agent import create_user_ratings_agent
 from app.agents.utils import format_agent_structured_output
 
 from app.shared.utils import load_chat_model
@@ -35,7 +35,7 @@ from app.shared.debug_utils import (
 @log_node_state_after_return
 async def human_node(
     state: AppAgentState, *, config: RunnableConfig
-) -> Command[Literal["sign_up", "ask_user_preferences", "human"]]:
+) -> Command[Literal["sign_up", "ask_user_ratings", "human"]]:
     """A node for collecting user input."""
     user_input = interrupt(value="Ready for user input.")
 
@@ -113,26 +113,26 @@ async def greeting_and_route_query(
     )
 
 
-# TODO: da implementare e integrare
-async def report_issue(
-    state: AppAgentState, *, config: RunnableConfig
-) -> dict[str, list[BaseMessage]]:
-    """Generate a response asking the user to describe the issue.
+# # TODO: da implementare e integrare
+# async def report_issue(
+#     state: AppAgentState, *, config: RunnableConfig
+# ) -> dict[str, list[BaseMessage]]:
+#     """Generate a response asking the user to describe the issue.
 
-    This node is called when the router determines that the user is experiencing some troubles in
-    using this recommendation system or is reporting an issue.
+#     This node is called when the router determines that the user is experiencing some troubles in
+#     using this recommendation system or is reporting an issue.
 
-    This node calls a tool to save the issue, in order to notify the support team
+#     This node calls a tool to save the issue, in order to notify the support team
 
-    Args:
-        state (AppAgentState): The current state of the agent, including conversation history and 
-                            router logic.
-        config (RunnableConfig): Configuration with the model used to respond.
+#     Args:
+#         state (AppAgentState): The current state of the agent, including conversation history and 
+#                             router logic.
+#         config (RunnableConfig): Configuration with the model used to respond.
 
-    Returns:
-        dict[str, list[str]]: A dictionary with a 'messages' key containing the generated response.
-    """
-    pass
+#     Returns:
+#         dict[str, list[str]]: A dictionary with a 'messages' key containing the generated response.
+#     """
+#     pass
 
 
 @log_node_state_after_return
@@ -190,7 +190,7 @@ async def sign_up(
 @log_node_state_after_return
 async def sign_in(
     state: AppAgentState, *, config: RunnableConfig
-) -> Command[Literal["recommendation", "ask_user_preferences"]]:
+) -> Command[Literal["recommendation", "ask_user_ratings"]]:
     # Load agent's configuration settings
     configuration = AgentConfiguration.from_runnable_config(config)
     model = load_chat_model(configuration.query_model)
@@ -218,7 +218,7 @@ async def sign_in(
             "messages": state.messages,
             "seen_movies": state.seen_movies
         },
-        goto="recommendation" if state.seen_movies else "ask_user_preferences"
+        goto="recommendation" if state.seen_movies else "ask_user_ratings"
     )
 
     # Load user preferences and other data
@@ -226,18 +226,18 @@ async def sign_in(
 
 
 @log_node_state_after_return
-async def ask_user_preferences(
+async def ask_user_ratings(
     state: AppAgentState, *, config: RunnableConfig
 ) -> Command[Literal["recommendation", "human"]]:
     """
-    Collects user preferences for movies and transitions to the next node in the graph.
+    Collects user-movie ratings and transitions to the next node in the graph.
     """
     # Load agent's configuration settings
     configuration = AgentConfiguration.from_runnable_config(config)
     model = load_chat_model(configuration.query_model)
 
-    # Create the user-preferences agent
-    user_preferences_agent = create_user_preferences_agent(state=state, llm=model)  
+    # Create the user-ratings agent
+    user_ratings_agent = create_user_ratings_agent(state=state, llm=model)  
 
     # Filter only HumanMessage and AIMessage for the agent input
     filtered_state = copy.deepcopy(state)
@@ -247,7 +247,7 @@ async def ask_user_preferences(
     ]
 
     # Pass the filtered state (with only HumanMessage and AIMessage) to the agent
-    response = await user_preferences_agent.ainvoke(filtered_state)
+    response = await user_ratings_agent.ainvoke(filtered_state)
 
     # Extract the last message from the response
     response_messages = response.get('messages', [])
@@ -257,7 +257,7 @@ async def ask_user_preferences(
         state.messages.append(last_response_message)  # Update the state
     else:
         # If the response does not contain messages, handle the error
-        print("[WARNING] User-preferences agent's response did not contain 'messages'.")
+        print("[WARNING] User-ratings agent's response did not contain 'messages'.")
         pass
 
     return Command(
@@ -314,7 +314,7 @@ builder.add_node("greeting_and_route_query", greeting_and_route_query)
 #builder.add_node(report_issue)
 builder.add_node("sign_up", sign_up)
 builder.add_node("sign_in", sign_in)
-builder.add_node("ask_user_preferences", ask_user_preferences)
+builder.add_node("ask_user_ratings", ask_user_ratings)
 builder.add_node("recommendation", recommendation)
 
 builder.add_edge(START, "greeting_and_route_query")

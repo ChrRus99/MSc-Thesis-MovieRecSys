@@ -133,6 +133,14 @@ services:
 
   movie_recommendation_service:
     <<: *microservices-common
+    deploy: # Add deploy section for GPU resources
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all # Or specify a count e.g., 1
+              capabilities: [gpu]
+    runtime: nvidia # Add nvidia runtime
     command: python /app/microservices/microservices/movie_recommendation/service.py
     ports:
       - "8002:8002"

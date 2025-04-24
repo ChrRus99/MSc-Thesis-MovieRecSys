@@ -48,7 +48,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Install PyTorch
 #RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
-RUN pip3 install torch torchvision torchaudio
+RUN pip3 install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+#RUN pip3 install torch torchvision torchaudio
 
 # Install additional Python dependencies
 # RUN pip install --no-cache-dir psycopg2==2.9.10 apache-airflow-providers-postgres==5.13.1
