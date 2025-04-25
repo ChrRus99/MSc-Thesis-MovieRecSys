@@ -7,9 +7,9 @@ from PIL import Image as PILImage
 from langchain_core.runnables.graph import MermaidDrawMethod # Import the enum for draw methods
 from langgraph.graph.state import CompiledStateGraph
 
-# Specific Chromium revision required by pyppeteer
-PYPPETEER_CHROMIUM_REVISION = '1263111'
-os.environ['PYPPETEER_CHROMIUM_REVISION'] = PYPPETEER_CHROMIUM_REVISION
+# Remove Pyppeteer specific revision setting
+# PYPPETEER_CHROMIUM_REVISION = '1263111'
+# os.environ['PYPPETEER_CHROMIUM_REVISION'] = PYPPETEER_CHROMIUM_REVISION
 
 
 def plot_langgraph_graph(graph: CompiledStateGraph, scale_factor: float=0.35):
@@ -17,11 +17,11 @@ def plot_langgraph_graph(graph: CompiledStateGraph, scale_factor: float=0.35):
     Generates and displays a visualization of a LangGraph graph.
 
     Attempts to use the default Mermaid rendering method first. If that fails, it falls back to 
-    using pyppeteer and resizes the image.
+    using playwright and resizes the image.
 
     Args:
         graph: The LangGraph graph object to visualize.
-        scale_factor: The factor by which to scale the image if pyppeteer is used. Defaults to 0.35.
+        scale_factor: The factor by which to scale the image if playwright is used. Defaults to 0.35.
     """
     # Apply nest_asyncio patch if running in an environment like Jupyter where it's needed
     nest_asyncio.apply()
@@ -41,12 +41,12 @@ def plot_langgraph_graph(graph: CompiledStateGraph, scale_factor: float=0.35):
             return # Exit function after successful display
 
         except Exception as e:
-            print(f"Default method failed: {e}. Trying pyppeteer fallback...")
+            print(f"Default method failed: {e}. Trying playwright fallback...")
 
         try:
-            # Generate the graph visualization using pyppeteer
+            # Generate the graph visualization using playwright
             img_bytes = graph.get_graph().draw_mermaid_png(
-                draw_method=MermaidDrawMethod.PYPPETEER
+                draw_method=MermaidDrawMethod.PLAYWRIGHT # Use PLAYWRIGHT instead of PYPPETEER
             )
 
             try:
@@ -67,7 +67,7 @@ def plot_langgraph_graph(graph: CompiledStateGraph, scale_factor: float=0.35):
                 resized_img_bytes = buffer.getvalue()
 
                 display(Image(resized_img_bytes))
-                print(f"Graph visualization successfully displayed using pyppeteer (resized to {int(scale_factor*100)}%).")
+                print(f"Graph visualization successfully displayed using playwright (resized to {int(scale_factor*100)}%).")
 
             except ImportError:
                 print("Pillow library not found. Please install it (`pip install Pillow`) to resize the image.")
@@ -81,12 +81,12 @@ def plot_langgraph_graph(graph: CompiledStateGraph, scale_factor: float=0.35):
                  print("Displayed original, unresized image instead (resizing error).")
 
         except ImportError as import_err:
-             print(f"Pyppeteer import failed: {import_err}")
-             print("Please ensure pyppeteer is installed (`pip install pyppeteer`).")
-        except Exception as e_pyppeteer:
-            print(f"Pyppeteer fallback failed: {e_pyppeteer}")
-            chromium_rev = os.environ.get('PYPPETEER_CHROMIUM_REVISION', 'Not Set')
-            print(f"Ensure pyppeteer is installed and the correct Chromium revision ({chromium_rev}) is available if needed.")
+             print(f"Playwright import failed: {import_err}") # Update error message
+             print("Please ensure playwright is installed (`pip install playwright`) and browsers are installed (`playwright install`).") # Update instructions
+        except Exception as e_playwright: # Update variable name
+            print(f"Playwright fallback failed: {e_playwright}") # Update error message
+            # Remove chromium revision message
+            print("Ensure playwright is installed and browsers are set up (`playwright install`).")
             print("Graph visualization could not be generated.")
 
     finally:

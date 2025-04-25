@@ -4,13 +4,19 @@ import sys
 import requests
 from dotenv import load_dotenv
 from pathlib import Path
-from typing import Annotated, Dict, Tuple, List
+from typing import Annotated, Dict, Tuple, List, Literal, Optional, Any
 
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import tool, ToolException
 
 from app.app_graph.movie_graph.state import RecommendationAgentState
 from app.shared.debug_utils import tool_log
+# Import the web search retrieval functions
+from app.web_search.movie_cast_and_crew_web_search_retriever import (
+    retrieve_movie_plot,
+    retrieve_movie_curiosities,
+    retrieve_movie_reviews
+)
 
 
 def is_docker():
@@ -123,12 +129,17 @@ def movie_cast_and_crew_kg_rag_information_tool(state: RecommendationAgentState)
         Callable: A coroutine tool function that retrieves movie information.
     """
     @tool(parse_docstring=True, response_format="content_and_artifact")
-    async def movie_cast_and_crew_kg_rag_information(entity: str, type: str) -> Tuple[str, Dict[str, str]]:
+    async def movie_cast_and_crew_kg_rag_information(
+        entity: str,
+        type: Literal["movie", "person"],
+        entity_id: str = None
+    ) -> Tuple[str, Dict[str, str]]:
         """ A tool that retrieves movie information from the knowledge graph.
 
         Args:
             entity: The name of the movie or person to search for.
             type: The type of entity ('movie' or 'person').
+            entity_id: (Optional) The unique ID of the movie or person to disambiguate the search.
 
         Returns:
             Tuple:
@@ -140,7 +151,8 @@ def movie_cast_and_crew_kg_rag_information_tool(state: RecommendationAgentState)
             function_name="movie_cast_and_crew_kg_rag_information_tool",
             messages=[
                 "Called Tool: [movie_cast_and_crew_kg_rag_information_tool]",
-                f"Retrieving information for {type}: {entity}"
+                f"Retrieving information for {type}: {entity}",
+                f"entity_id: {entity_id}" if entity_id else "entity_id: None"
             ]
         )
 
@@ -149,6 +161,8 @@ def movie_cast_and_crew_kg_rag_information_tool(state: RecommendationAgentState)
             "entity": entity,
             "type": type
         }
+        if entity_id:
+            formatted_params["entity_id"] = entity_id
 
         # Retrieve movie, cast or crew information
         BASE_URL = "http://host.docker.internal:" if is_docker() else "http://localhost:"
@@ -162,7 +176,7 @@ def movie_cast_and_crew_kg_rag_information_tool(state: RecommendationAgentState)
         response_data = response.json()
         
         # Serialize the results
-        message = f"Movie, cast or crew information retrieved successfully."
+        message = f"{type} information {entity} retrieved successfully: {response_data}"
         
         # Create ToolMessage for confirmation
         tool_message = ToolMessage(
@@ -178,11 +192,9 @@ def movie_cast_and_crew_kg_rag_information_tool(state: RecommendationAgentState)
     return movie_cast_and_crew_kg_rag_information
 
 
-# TODO: DA IMPLEMENTARE <<<<<------ DA QUI
-# NOTA: l'input è sbagliato, bisogna mettere più dettagli per fare retrieval opinioni, movie details, ecc.
 def movie_cast_and_crew_web_search_information_tool(state: RecommendationAgentState):
     """
-    Creates a tool function to retrieve movie, cast and crew information information from the web.
+    Creates a tool function to retrieve movie plot, curiosities, or reviews from the web.
 
     This factory function generates a tool that retrieves movie, cast and crew information that are 
     not present in the knowledge graph from the web by means of the Crawl4AI library (open-source, 
@@ -197,60 +209,74 @@ def movie_cast_and_crew_web_search_information_tool(state: RecommendationAgentSt
         Callable: A coroutine tool function that retrieves movie information from the web.
     """
     @tool(parse_docstring=True, response_format="content_and_artifact")
-    async def movie_cast_and_crew_web_search_information(entity: str) -> Tuple[str, Dict[str, str]]:
-        """ A tool that retrieves movie information from the web.
+    async def movie_cast_and_crew_web_search_information(
+        type: Literal["plot", "curiosity", "reviews"],
+        movie_title: str,
+        query: Optional[str] = None
+    ) -> Tuple[str, Any]:
+        """ A tool that retrieves movie plot, curiosities, or reviews from the web.
 
         Args:
-            entity: The name of the movie to search for.
-            type: The type of entity ('movie' or 'person').
+            type: The type of information to retrieve ('plot', 'curiosity', or 'reviews').
+            movie_title: The title of the movie to search for.
+            query: (Optional) The specific query for curiosity or review retrieval. Required if type is 'curiosity' or 'reviews'.
 
         Returns:
             Tuple:
-                - str: A message containing the retrieved movie information.
-                - dict: A dictionary containing the retrieved movie information.
+                - str: A message indicating the result of the retrieval.
+                - Any: The retrieved data (string for plot, list of dicts for curiosity/reviews, or None).
         """
         # DEBUG LOG
         tool_log(
             function_name="movie_cast_and_crew_web_search_information_tool",
             messages=[
                 "Called Tool: [movie_cast_and_crew_web_search_information_tool]",
-                f"Retrieving information for {type}: {entity}"
+                f"Retrieving '{type}' for movie: '{movie_title}'",
+                f"Query: '{query}'" if query else "Query: None"
             ]
         )
 
-        # Construct the request payload
-        formatted_params = {
-            "entity": entity,
-            "type": type
-        }
+        response_data: Any = None
+        message: str = ""
 
+        try:
+            if type == "plot":
+                response_data = await retrieve_movie_plot(movie_title)
+                if response_data:
+                    message = f"Plot for '{movie_title}' retrieved successfully."
+                else:
+                    message = f"Could not retrieve plot for '{movie_title}'."
+            elif type == "curiosity":
+                if not query:
+                    raise ToolException("Query is required for retrieving curiosities.")
+                response_data = await retrieve_movie_curiosities(movie_title, query)
+                if response_data:
+                    message = f"Curiosities for '{movie_title}' related to '{query}' retrieved successfully."
+                else:
+                    message = f"Could not retrieve curiosities for '{movie_title}' related to '{query}'."
+            elif type == "reviews":
+                if not query:
+                    raise ToolException("Query is required for retrieving reviews.")
+                response_data = await retrieve_movie_reviews(movie_title, query)
+                if response_data:
+                    message = f"Reviews for '{movie_title}' related to '{query}' retrieved successfully."
+                else:
+                    message = f"Could not retrieve reviews for '{movie_title}' related to '{query}'."
+            else:
+                raise ToolException(f"Invalid type specified: {type}. Must be 'plot', 'curiosity', or 'reviews'.")
 
-        # TODO: DA IMPLEMENTARE IN MICROSERVICES con file ad-hoc da chiamare da service.py
-        ##################################################################################
+        except Exception as e:
+            message = f"An error occurred while retrieving {type} for '{movie_title}': {e}"
+            print(f"Error in movie_cast_and_crew_web_search_information_tool: {message}")
+            # Optionally re-raise or handle specific exceptions
+            # raise ToolException(message) from e
 
-        # Retrieve movie information from the web
-        BASE_URL = "http://host.docker.internal:" if is_docker() else "http://localhost:"
-        PORT = os.getenv("MOVIE_WEB_SEARCH_MICROSERVICE_PORT")
-
-        response = requests.get(
-            url=f"{BASE_URL}{PORT}/web_search_info",
-            params=formatted_params
-        )
-        assert response.status_code == 200, "Failed to retrieve movie information from the web"
-        response_data = response.json()
-
-        ##################################################################################
-
-        
-        # Serialize the results
-        message = f"Movie information retrieved successfully."
-        
-        # Create ToolMessage for confirmation
+        # Create ToolMessage for confn
         tool_message = ToolMessage(
             content=message,
             name="movie_cast_and_crew_web_search_information_tool",
             tool_call_id="call_movie_cast_and_crew_web_search_information_tool"
-        )
+                    )
         state.messages.append(tool_message)
 
         # Return content and artifacts

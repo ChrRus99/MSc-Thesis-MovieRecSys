@@ -221,32 +221,42 @@ def reset_knowledge_graph() -> None:
     print("[LOG] Knowledge graph reset finished successfully.")
 
 
-#def store_new_movies_cast_and_crew_nodes() -> None:
 def store_movie_rating(user_id: str, movie_id: str, rating: int):
     """Stores/Updates the knowledge graph with new movies, cast and crew nodes or information"""
     graph = get_db_connection()
 
     # Cypher query to store user's movie rating in the Neo4j database
     store_rating_query = """
-    MERGE (u:User {userId:$user_id}) 
-    WITH u 
+    MERGE (u:User {userId:$user_id})
+    WITH u
     UNWIND $candidates as row
-    MATCH (m:Movie {title: row.candidate})
+    // Use the unique ID for matching the movie
+    MATCH (m:Movie {id: toInteger(row.id)})
     MERGE (u)-[r:RATED]->(m)
     SET r.rating = toFloat($rating)
     RETURN distinct 'Noted' AS response
     """
 
-    # Retrieve possible matching candidates
+    # Retrieve possible matching candidates including their IDs
     candidates = _get_candidates(movie_id, "movie")
 
     if not candidates:
         return "This movie is not in our database"
-    
-    # Execute the Cypher query to store the user's rating
+    elif len(candidates) > 1:
+        newline = "\n"
+        # Include the ID in the message
+        return (
+            "Need additional information, which of these "
+            f"did you mean: {newline + newline.join(str(d) for d in candidates)}"
+            "\nPlease provide the 'id' for the movie."
+        )
+
+    # If only one candidate, proceed with storing the rating using its ID
+    single_candidate_list = [candidates[0]]
+
     response = graph.query(
         store_rating_query,
-        params={"user_id": user_id, "candidates": candidates, "rating": rating},
+        params={"user_id": user_id, "candidates": single_candidate_list, "rating": rating},
     )
 
     # Return a confirmation message
@@ -257,111 +267,137 @@ def store_movie_rating(user_id: str, movie_id: str, rating: int):
         return "Something went wrong"
 
 
-def get_movie_cast_and_crew_information(entity: str, type: str) -> str:
+def get_movie_cast_and_crew_information(entity: str, type: str, entity_id: Optional[str] = None) -> str:
     """
     Fetch detailed information about a given movie or person from the database.
-    
+
     Args:
-        entity (str): The name of the movie or person to search for.
+        entity (str): The name/title of the movie or person to search for (used if entity_id is None).
         type (str): The type of entity ('movie' or 'person').
-    
+        entity_id (Optional[str]): The unique ID of the movie (numeric string) or person (name string)
+                                   to fetch directly. If provided, 'entity' and 'type' are ignored for lookup.
+
     Returns:
-        str: A formatted string containing the information or an error message if not found.
+        str: A formatted string containing the information or an error/ambiguity message.
     """
     graph = get_db_connection()
+    candidate_info = None
 
-    # Retrieve possible matching candidates
-    candidates = _get_candidates(entity, type)
+    # If entity_id is provided, try to fetch directly
+    if entity_id:
+        id_property = "id" if entity_id.isdigit() else "name"
+        label = "Movie" if id_property == "id" else "Person"
+        match_value = int(entity_id) if id_property == "id" else entity_id
 
-    if not candidates:
-        return "No information was found about the movie or person in the database"
-    elif len(candidates) > 1:
-        newline = "\n"
-        return (
-            "Need additional information, which of these "
-            f"did you mean: {newline + newline.join(str(d) for d in candidates)}"
-        )
-    
-    # Execute the Cypher query to retrieve information about the matched entity
+        direct_fetch_query = f"""
+        MATCH (m:{label} {{{id_property}: $match_value}})
+        RETURN coalesce(m.title, m.name) AS candidate
+        LIMIT 1
+        """
+        result = graph.query(direct_fetch_query, params={"match_value": match_value})
+        if result:
+            candidate_info = {"candidate": result[0]["candidate"]}
+        else:
+            return f"No information found for the provided ID: {entity_id}"
+
+    # If no entity_id or direct fetch failed, perform search
+    if not candidate_info:
+        candidates = _get_candidates(entity, type)
+
+        if not candidates:
+            return "No information was found about the movie or person in the database"
+        elif len(candidates) > 1:
+            newline = "\n"
+            return (
+                "Need additional information, which of these "
+                f"did you mean: {newline + newline.join(str(d) for d in candidates)}"
+                f"\nPlease call the function again providing the 'id' for the desired entity."
+            )
+        else:
+            candidate_info = candidates[0]
+
+    # Fetch description using the determined candidate name/title
     description_query = """
     MATCH (m:Movie|Person)
     WHERE m.title = $candidate OR m.name = $candidate
-    MATCH (m)-[r:ACTED_IN|DIRECTED|HAS_GENRE]-(t)
+    MATCH (m)-[r:ACTED_IN|DIRECTED|IN_GENRE|WORKED_ON]-(t)
     WITH m, type(r) as type, collect(coalesce(t.name, t.title)) as names
-    WITH m, type+": "+reduce(s="", n IN names | s + n + ", ") as types
+    WITH m, type + ": " + reduce(s="", n IN names | s + n + ", ") as types
     WITH m, collect(types) as contexts
-    WITH m, "type:" + labels(m)[0] + "\ntitle: "+ coalesce(m.title, m.name) 
-        + "\nyear: "+coalesce(m.released,"") +"\n" +
-        reduce(s="", c in contexts | s + substring(c, 0, size(c)-2) +"\n") as context
-    RETURN context LIMIT 1
+    WITH m, "type:" + labels(m)[0] +
+           "\ntitle: " + coalesce(m.title, m.name) +
+           "\nyear: " + coalesce(toString(m.release_date.year), "") + "\n" +
+           reduce(s="", c in contexts | s + substring(c, 0, size(c)-2) +"\n") as context
+    RETURN context
+    LIMIT 1
     """
     data = graph.query(
-        description_query, params={"candidate": candidates[0]["candidate"]}
+        description_query, params={"candidate": candidate_info["candidate"]}
     )
 
-    # Return formatted entity information
-    return data[0]["context"]
+    if data:
+        return data[0]["context"]
+    else:
+        return f"Found {candidate_info['candidate']} but no further details available."
 
 
 def show(cypher_query: Optional[str] = None) -> GraphWidget:
-        """
-        Displays the graph resulting from the given Cypher query.
-        
-        Parameters:
-            cypher_query: Optional Cypher query to execute and visualize the graph.
-                          If None, a default query is used to display a sample of the graph.
-        Returns:
-            A GraphWidget object displaying the queried graph.
-        """
-        # Set a default Cypher query if none is provided
-        if cypher_query is None:
-            # Directly show the graph resulting from the given Cypher query
-            cypher_query = "MATCH (s)-[r]->(t) RETURN s,r,t LIMIT 500"
-        
-        # Create a graph widget to display the graph
-        try:
-            with GraphDatabase.driver(
-                os.environ["NEO4J_URI"],
-                auth=(os.environ["NEO4J_USERNAME"], os.environ["NEO4J_PASSWORD"])
-            ) as neo4j_driver:
-                with neo4j_driver.session() as session:
-                    result_graph = session.run(cypher_query).graph()
-                    
-                    widget = GraphWidget(graph=result_graph)
-                    widget.node_label_mapping = 'id'
-                    
-                    # Uncomment if using in Jupyter or IPython environment
-                    #display(widget)
-                    
-                    return widget
-        except Exception as e:
-            print(f"Failed to display graph visualization: {e}")
-            raise
+    """
+    Displays the graph resulting from the given Cypher query.
+    
+    Parameters:
+        cypher_query: Optional Cypher query to execute and visualize the graph.
+                        If None, a default query is used to display a sample of the graph.
+    Returns:
+        A GraphWidget object displaying the queried graph.
+    """
+    # Set a default Cypher query if none is provided
+    if cypher_query is None:
+        # Directly show the graph resulting from the given Cypher query
+        cypher_query = "MATCH (s)-[r]->(t) RETURN s,r,t LIMIT 500"
+    
+    # Create a graph widget to display the graph
+    try:
+        with GraphDatabase.driver(
+            os.environ["NEO4J_URI"],
+            auth=(os.environ["NEO4J_USERNAME"], os.environ["NEO4J_PASSWORD"])
+        ) as neo4j_driver:
+            with neo4j_driver.session() as session:
+                result_graph = session.run(cypher_query).graph()
+                
+                widget = GraphWidget(graph=result_graph)
+                widget.node_label_mapping = 'id'
+                
+                # Uncomment if using in Jupyter or IPython environment
+                #display(widget)
+                
+                return widget
+    except Exception as e:
+        print(f"Failed to display graph visualization: {e}")
+        raise
 
 
 def _get_candidates(input: str, type: str, limit: int = 3) -> List[Dict[str, str]]:
     """
     Retrieves a list of candidate entities from database based on the input string.
 
-    This function queries the Neo4j database using a full-text search. It takes the input string,
-    generates a full-text query, and executes this query against the specified index in the database.
-    The function returns a list of candidates matching the query, with each candidate being a
-    dictionary containing their name (or title) and label (either 'Person' or 'Movie').
+    Returns a list of dictionaries, each containing 'candidate' (name/title),
+    'label' ('Person' or 'Movie'), and 'id' (unique identifier: movie ID or person name).
     """
     graph = get_db_connection()
 
-    # Cypher query to retrieve candidate entities from the Neo4j database
     candidate_query = """
     CALL db.index.fulltext.queryNodes($index, $fulltextQuery, {limit: $limit})
     YIELD node
+    WITH node, [el in labels(node) WHERE el IN ['Person', 'Movie'] | el][0] AS label
     RETURN coalesce(node.name, node.title) AS candidate,
-        [el in labels(node) WHERE el IN ['Person', 'Movie'] | el][0] AS label
+           label,
+           CASE label WHEN 'Movie' THEN toString(node.id) ELSE node.name END AS id
     """
 
-    # Generate full-text query and retrieve candidates
     ft_query = generate_full_text_query(input)
     candidates = graph.query(
         candidate_query, {"fulltextQuery": ft_query, "index": type, "limit": limit}
     )
 
-    return candidates
+    return [dict(c) for c in candidates] if candidates else []

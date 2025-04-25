@@ -6,7 +6,7 @@ RecommendationAgentState, which is an extended version of the InputState.
 
 import pandas as pd
 from dataclasses import dataclass, field
-from typing import Annotated, Literal, TypedDict, Optional, List, Dict, Tuple
+from typing import Annotated, Literal, TypedDict, Optional, List, Dict, Tuple, Any
 
 from app.shared.state import InputState
 
@@ -18,6 +18,11 @@ class RecommendationAgentState(InputState):
     
     # Last active agent
     last_active_agent: Optional[Annotated[Literal["movie_information", "movie_recommendation"], "last_active_agent"]] = None
+    """The last active agent that was used in the conversation."""
+
+    # Information retrieval
+    information: Dict[str, Any] = field(default_factory=dict)
+    """The dictionary containing the information retrieved by the information agent."""
 
     # Recommended movies
     recommended_movies_df: pd.DataFrame = field(default_factory=pd.DataFrame)

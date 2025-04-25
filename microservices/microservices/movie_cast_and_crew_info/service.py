@@ -65,8 +65,19 @@ def health():
 
 # Endpoint for kg_rag_neo4j_db_handler.py
 @app.get("/kg_rag_neo4j_info")
-async def kg_rag_neo4j_info(entity: str, type: str):
-    return get_movie_cast_and_crew_information(entity, type)
+async def kg_rag_neo4j_info(entity: str, type: str, entity_id: Optional[str] = None):
+    if entity_id:
+        # Entity disambiguation
+        return get_movie_cast_and_crew_information(entity, type, entity_id)
+    else:
+        # Search for the entity
+        return get_movie_cast_and_crew_information(entity, type)
+
+
+# @app.get("/web_search_info")
+# async def web_search_info(entity: str, type: str, entity_id: Optional[str] = None):
+#     # TODO
+#     pass
 
 
 if __name__ == "__main__":

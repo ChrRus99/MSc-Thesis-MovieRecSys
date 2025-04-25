@@ -15,9 +15,9 @@ from langchain_core.runnables import RunnableConfig
 from app.app_graph.configuration import AgentConfiguration
 from app.shared.state import InputState
 from app.app_graph.movie_graph.state import RecommendationAgentState
-from app.app_graph.prompts import ANALYZE_AND_ROUTE_MOVIE_SYSTEM_PROMPT
 
 from app.agents.query_analyzer_agent import create_query_analyzer_agent
+from app.agents.movie_information_agent import create_movie_information_agent
 from app.agents.movie_recommender_agent import create_movie_recommender_agent
 from app.agents.evaluator_agent import create_evaluator_agent
 from app.agents.utils import format_agent_structured_output
@@ -73,7 +73,6 @@ async def analyze_and_route_query(
     # Create a query analyzer agent
     query_analyzer_agent = create_query_analyzer_agent(
         state=state,
-        prompt=ANALYZE_AND_ROUTE_MOVIE_SYSTEM_PROMPT,
         llm=model,
         verbose=True
     )
@@ -116,23 +115,118 @@ async def general_question(
 async def movie_information(
     state: RecommendationAgentState, *, config: RunnableConfig
 ) -> Command[Literal["human"]]:
-    ### Call graph info_graph
-    # TODO
+    ### Call the movie information agent to retrieve information using KG RAG or Web Search
 
+    # Load agent's configuration settings
+    configuration = AgentConfiguration.from_runnable_config(config)
+    model = load_chat_model(configuration.query_model)
 
-    # Update the last active agent for eventual response refinement
-    state.last_active_agent = "movie_information"  # Update the last active agent
-    
+    # Retrieve the user_id from config
+    state.user_id = config["configurable"]["user_id"]
+
+    # Create a movie information agent
+    movie_info_agent = create_movie_information_agent(state=state, llm=model, verbose=True)
+
+    # Extract the last user message (which triggered the information request)
+    user_message = next((msg for msg in reversed(state.messages) if msg.type == 'human'), None)
+    if not user_message:
+         raise ValueError("No user message found in state for information retrieval.")
+
+    # Filter out ToolMessages from chat history
+    chat_history = state.messages[:-1] # Chat history (excluding the last message)
+    filtered_chat_history = [
+        msg for msg in chat_history if not isinstance(msg, ToolMessage)
+    ]
+
+    # --- Retry Logic ---
+    MAX_RETRIES = 3
+    agent_messages = ["Sorry, I encountered an issue retrieving the information. Please try again."] # Default error message
+    information = {}
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            # Invoke the movie information agent with the user message and chat history
+            structured_response = await movie_info_agent.ainvoke({
+                "input": user_message.content,
+                "chat_history": [filtered_chat_history[-1]] if filtered_chat_history else [] # Pass only the last message in chat history
+            })
+
+            # --- Start of monkey-patch for parsing ---
+            raw_output = structured_response.get("output", "")
+            if not raw_output:
+                 raise ValueError("Agent returned empty output.")
+            cleaned_output = re.sub(r"```json\n?(.*?)\n?```", r"\1", raw_output, flags=re.DOTALL).strip()
+
+            structured_response_dict = None
+            try:
+                structured_response_dict = ast.literal_eval(cleaned_output)
+            except (ValueError, SyntaxError, json.JSONDecodeError) as parse_error:
+                raise ValueError(f"Error parsing agent output string: {parse_error}. Cleaned output: {cleaned_output}") from parse_error
+
+            if not isinstance(structured_response_dict, dict):
+                 raise TypeError(f"Expected a dictionary after parsing, but got {type(structured_response_dict)}. Cleaned output: {cleaned_output}")
+            # --- End of monkey-patch ---
+
+            # Extract the structured response
+            agent_messages = structured_response_dict.get("messages", ["Here is the information I found:"])
+            information = structured_response_dict.get("information", {})
+
+            # If everything succeeded, break the loop
+            break
+
+        except (AttributeError, ValidationError, TypeError, ValueError, Exception) as e:
+            print(f"Error during movie information retrieval (attempt {attempt + 1}/{MAX_RETRIES}): {e}")
+            if attempt + 1 >= MAX_RETRIES:
+                print("Max retries reached. Using default error response.")
+                # Keep the default error message in agent_messages
+            else:
+                await asyncio.sleep(1) # Wait before retrying
+                continue # Go to the next attempt
+    # --- End of Retry Logic ---
+
+    # Format the final response message
+    final_response_parts = []
+    final_response_parts.extend(agent_messages) # Add summary message(s)
+
+    # Add retrieved information details (if any and not just an error message)
+    if information and not (len(agent_messages) == 1 and "encountered an issue" in agent_messages[0]):
+        # Simple formatting for now, could be improved based on expected information structure
+        final_response_parts.append("\n--- Details ---")
+        for key, value in information.items():
+            final_response_parts.append(f"**{key.replace('_', ' ').title()}:** {value}")
+        final_response_parts.append("--- End Details ---")
+    elif not information and attempt + 1 >= MAX_RETRIES: # If retries failed and info is empty
+        pass # The error message from agent_messages is already set
+    elif not information: # If agent genuinely found no info (not due to error)
+        final_response_parts.append("I couldn't find specific information based on that query.")
+
+    final_response_content = "\n".join(final_response_parts)
+
+    # Create a single AIMessage with the formatted content
+    final_ai_message = AIMessage(content=final_response_content)
+    state.messages.append(final_ai_message) # Update the state
+    state.information = information # Store retrieved information
+
+    # Clear the report and mood after they have been used
+    state.report = []
+    #state.mood = []
+
+    # Update the last active agent
+    state.last_active_agent = "movie_information"
+
+    # Ask for feedback *after* providing information
+    feedback_request_message = AIMessage(content="Was this information helpful?")
+    state.messages.append(feedback_request_message)
+
     # Route to human node to get feedback via interrupt
     return Command(
-        # update={
-        #     "messages": state.messages,
-        #     "movies": state.movies,
-        #     "explanations": state.explanations,
-        #     "last_active_agent": state.last_active_agent, # Ensure last_active_agent is updated
-        #     "report": [], # Clear previous report
-        #     "mood": [], # Clear previous mood
-        # },
+        update={
+            "messages": state.messages,
+            "information": state.information, # Pass information to state
+            "last_active_agent": state.last_active_agent,
+            "report": [], # Clear previous report
+            #"mood": [], # Clear previous mood
+        },
         goto="human" # Route to human node for feedback interrupt
     )
 
@@ -215,16 +309,12 @@ async def movie_recommendation(
             print(f"Error during movie recommendation (attempt {attempt + 1}/{MAX_RETRIES}): {e}")
             if attempt + 1 >= MAX_RETRIES:
                 print("Max retries reached. Using default error response.")
-                # Keep the default error message set before the loop
-                # Optionally, re-raise the last exception if you want the graph to fail hard
-                # raise e
+                raise e  # Raise the error if max retries reached
             else:
                 await asyncio.sleep(1) # Wait a second before retrying
                 continue # Go to the next attempt
-
     # --- End of Retry Logic ---
-
-
+    
     # Format the final response message
     final_response_parts = []
     final_response_parts.extend(agent_messages)  # Add introductory message(s)
@@ -239,11 +329,10 @@ async def movie_recommendation(
         else:
              for movie_title in movies:
                 final_response_parts.append(f"- **{movie_title}**")
-    elif not movies and attempt + 1 >= max_retries: # If retries failed and movies is empty
+    elif not movies and attempt + 1 >= MAX_RETRIES: # If retries failed and movies is empty
         pass # The error message from agent_messages is already set
     else: # If agent genuinely found no movies (not due to error)
         final_response_parts.append("I couldn't find specific recommendations based on that.")
-
 
     final_response_content = "\n".join(final_response_parts)
 
@@ -285,7 +374,7 @@ async def evaluation(
     """
     Evaluates the user's feedback (received via human_node interrupt) on the previous agent's response,
     saves preferences, and updates the state with a report, mood, and satisfaction status.
-    Routes based on satisfaction.
+    Routes based on satisfaction and the last active agent. # <-- Updated description
     """
     # Load agent's configuration settings
     configuration = AgentConfiguration.from_runnable_config(config)
@@ -331,7 +420,21 @@ async def evaluation(
     state.is_user_satisfied = is_user_satisfied
     state.report = report
     state.mood = mood
-    
+
+    # Determine the next step based on user satisfaction and the agent that last responded
+    next_node = END
+    if not is_user_satisfied:
+        if state.last_active_agent == "movie_information":
+            next_node = "movie_information"
+        elif state.last_active_agent == "movie_recommendation":
+            next_node = "movie_recommendation"
+        # Add more conditions here if other agents can lead to evaluation
+        else:
+             # Default fallback if last_active_agent is unknown or not handled
+             # This might indicate a need to refine the logic or handle edge cases
+             print(f"Warning: Unknown last_active_agent '{state.last_active_agent}' in evaluation node. Ending conversation.")
+             next_node = END
+
     return Command(
         update={
             "messages": state.messages,
@@ -339,8 +442,7 @@ async def evaluation(
             "report": state.report,
             "mood": state.mood,
         },
-        # Determine the next step based on user satisfaction
-        goto=state.last_active_agent if not is_user_satisfied else END
+        goto=next_node # Use the determined next node
     )
 
 
@@ -361,4 +463,4 @@ builder.add_edge("general_question", "analyze_and_route_query")
 
 # Compile into a graph object that you can invoke and deploy.
 graph = builder.compile()
-graph.name = "InfoAndRecommendationGraph"
+graph.name = "MovieGraph"
