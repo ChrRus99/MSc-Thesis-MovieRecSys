@@ -176,7 +176,8 @@ def movie_cast_and_crew_kg_rag_information_tool(state: RecommendationAgentState)
         response_data = response.json()
         
         # Serialize the results
-        message = f"{type} information {entity} retrieved successfully: {response_data}"
+        #message = f"{type} information {entity} retrieved successfully: {response_data}"
+        message = f"{type} information {entity} retrieved successfully."
         
         # Create ToolMessage for confirmation
         tool_message = ToolMessage(

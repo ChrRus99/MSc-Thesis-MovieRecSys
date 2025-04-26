@@ -23,7 +23,7 @@ Based on the user's query, you must decide which of the following routes is the 
 2.  **`movie_recommendation`**: Use this route if the user is asking for movie suggestions, recommendations based on preferences (genre, actors, mood), or wants help finding something to watch.
     *   Examples: "Recommend a good sci-fi movie.", "I liked Parasite, what else should I watch?", "Suggest a comedy movie from the 90s.", "What are the best movies of 2000?"
 
-3.  **`general_question`**: Use this route for any queries that don't fall into the above categories. This includes general conversation, greetings, questions about the system itself, clarifications, or off-topic discussions.
+3.  **`general_question`**: Use this route for any queries that don't fall into the above categories, namely any general questions or casual conversation not specifically related to movie information or recommendations. This includes general conversation, greetings, questions about the system itself, clarifications, or off-topic discussions.
     *   Examples: "Hi there!", "How does this recommendation system work?", "Can you tell me a joke?", "What's the weather like?"
 
 ------

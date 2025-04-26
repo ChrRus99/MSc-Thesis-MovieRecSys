@@ -33,15 +33,15 @@ def make_handoff_tool(state: InputState, *, agent_name: str):
             Command: A command to transfer to another agent.
         """
         try:
-            # DEBUG LOG
-            tool_log(
-                function_name="handoff_to_agent: " + tool_name, 
-                fields={
-                    "tool_id": tool_call_id,
-                    "tool_name": tool_name,
-                    "transfer_to_agent": agent_name
-                }
-            )
+            # # DEBUG LOG
+            # tool_log(
+            #     function_name="handoff_to_agent: " + tool_name, 
+            #     fields={
+            #         "tool_id": tool_call_id,
+            #         "tool_name": tool_name,
+            #         "transfer_to_agent": agent_name
+            #     }
+            # )
 
             # Create a ToolMessage to signal the handoff
             tool_message = ToolMessage(

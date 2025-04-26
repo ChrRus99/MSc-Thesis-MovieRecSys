@@ -39,6 +39,8 @@ class AppAgentState(InputState):
     """The user's unique identifier."""
     is_user_registered: Optional[bool] = None
     """A flag indicating whether the user is registered in the system."""
+    is_user_new: Optional[bool] = None
+    """A flag indicating whether the user is new to the system."""
     user_data: UserData = field(default_factory=dict)
     """The user's personal data."""
 

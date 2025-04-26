@@ -12,16 +12,19 @@ from typing import Any, Annotated, Literal, TypedDict, cast
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage, ToolMessage
-from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables import RunnableConfig, Runnable
+from langchain_core.prompts import ChatPromptTemplate
 
 from app.app_graph.configuration import AgentConfiguration
 from app.shared.state import InputState
 from app.app_graph.state import AppAgentState
+from app.app_graph.movie_graph.graph import graph as movie_graph
 
 from app.agents.greeting_agent import create_greeting_agent
 from app.agents.sign_up_agent import create_sign_up_agent
 from app.agents.sign_in_agent import create_sign_in_agent
 from app.agents.user_ratings_agent import create_user_ratings_agent
+from app.agents.get_first_query_agent import create_get_first_query_agent
 from app.agents.utils import format_agent_structured_output
 
 from app.shared.utils import load_chat_model
@@ -35,7 +38,7 @@ from app.shared.debug_utils import (
 @log_node_state_after_return
 async def human_node(
     state: AppAgentState, *, config: RunnableConfig
-) -> Command[Literal["sign_up", "ask_user_ratings", "human"]]:
+) -> Command[Literal["sign_up", "ask_user_ratings", "get_first_user_query", "human"]]:
     """A node for collecting user input."""
     user_input = interrupt(value="Ready for user input.")
 
@@ -190,7 +193,7 @@ async def sign_up(
 @log_node_state_after_return
 async def sign_in(
     state: AppAgentState, *, config: RunnableConfig
-) -> Command[Literal["recommendation", "ask_user_ratings"]]:
+) -> Command: #) -> Command[Literal["recommendation", "ask_user_ratings"]]:
     # Load agent's configuration settings
     configuration = AgentConfiguration.from_runnable_config(config)
     model = load_chat_model(configuration.query_model)
@@ -218,7 +221,7 @@ async def sign_in(
             "messages": state.messages,
             "seen_movies": state.seen_movies
         },
-        goto="recommendation" if state.seen_movies else "ask_user_ratings"
+        #goto="recommendation" if state.seen_movies else "ask_user_ratings"
     )
 
     # Load user preferences and other data
@@ -228,7 +231,7 @@ async def sign_in(
 @log_node_state_after_return
 async def ask_user_ratings(
     state: AppAgentState, *, config: RunnableConfig
-) -> Command[Literal["recommendation", "human"]]:
+) -> Command[Literal["get_first_user_query", "human"]]:
     """
     Collects user-movie ratings and transitions to the next node in the graph.
     """
@@ -268,43 +271,87 @@ async def ask_user_ratings(
         goto="human"
     )
 
-
-# TODO DA SISTEMARE MEGLIO recommendation -> vedi conduct_research in rag_agent, ma è un pò diverso!
-# TODO deve ritornare movies anzichè documenti ---> vedi se conviene creare dati strutturati
-
 @log_node_state_after_return
-async def recommendation(
+async def get_first_user_query(
     state: AppAgentState, *, config: RunnableConfig
-) -> Command:
-    """Execute the rag agent's graph.
+) -> Command[Literal["human", "movie_info_and_recommendation"]]:
+    # Load agent's configuration settings
+    configuration = AgentConfiguration.from_runnable_config(config)
+    model = load_chat_model(configuration.query_model)
 
-    This function executes the rag agent's graph for retrieving relevant movies to recommend to the 
-    user.
+    # Create the get_first_query_agent
+    get_first_query_agent = create_get_first_query_agent(state=state, llm=model)
+
+    # Filter only HumanMessage and AIMessage for the agent input
+    filtered_state = copy.deepcopy(state)
+    filtered_state.messages = [
+        m for m in state.messages
+        if type(m).__name__ in ("HumanMessage", "AIMessage")
+    ]
+    # Pass only the last message to the agent
+    filtered_state.messages = filtered_state.messages[-1] if filtered_state.messages else []
+
+    # Pass the filtered state (with only HumanMessage and AIMessage) to the agent
+    response = await get_first_query_agent.ainvoke(filtered_state)
+
+    # Extract the last message from the response (if any)
+    response_messages = response.get('messages', [])
+    
+    if response_messages:
+        last_response_message = response_messages[-1]
+        state.messages.append(last_response_message)  # Update the state
+    else:
+        # If the response does not contain messages, handle the error
+        print("[WARNING] Get first user query agent's response did not contain 'messages'.")
+        pass
+
+    return Command(
+        update={
+            "messages": state.messages,
+        },
+        goto="human"
+    )
+
+
+#@log_node_state_after_return  # Use debug inside the movie_graph
+async def movie_info_and_recommendation(
+    state: AppAgentState, *, config: RunnableConfig
+):
+    """
+    Invokes the movie agent sub-graph to handle movie information requests and recommendations.
+
+    This node acts as an entry point to the specialized movie interaction graph. It prepares the
+    necessary state and configuration, calls the movie agent, and updates the main application
+    state upon completion of the sub-graph's execution.
 
     Args:
-        state (AppAgentState): The current state of the agent, including the research plan steps.
+        state (AppAgentState): The current state of the main application agent.
+        config (RunnableConfig): The configuration for the agent execution.
 
     Returns:
-        dict[str, list[str]]: A dictionary with 'documents' containing the research results and
-                              'steps' containing the remaining research steps.
-
-    Behavior:
-        - Invokes the researcher_graph with the first step of the research plan.
-        - Updates the state with the retrieved documents and removes the completed step.
+        Command: A command indicating the next step, typically ending the main graph flow
+                 as the movie interaction is self-contained within the sub-graph.
     """
-
-    # Invoke the rag_graph with...
-    #result = await rag_graph.ainvoke({"question": state.steps[0]})
-
-    # Return the research results ('documents') and ...
-    #return {"documents": result["documents"], "steps": state.steps[1:]}
-
-    pass
     
+    print("--- Entering movie_graph subgraph ---")
 
-    # (at this point the user is signed-in)
-    # Hi Jhon, how can i help you today? Have you seen anything interesting lately?
-    # call rag_agent
+    # Extract the last user message from the chat history
+    last_user_message = None
+    for msg in reversed(state.messages):
+        if isinstance(msg, HumanMessage):
+            last_user_message = msg
+            break
+    if last_user_message is None:
+        # Handle the case where no human message is found, though this might indicate an issue
+        print("[WARNING] No HumanMessage found in state.messages for movie_info_and_recommendation node.")
+
+    print("----------------> State messages: ", state.messages)
+    print("----------------> Last user message: ", last_user_message)
+
+    # Call the movie agent sub-graph passing only the last user message
+    result = await movie_graph.ainvoke({"messages": last_user_message})
+
+    print("--- Exiting movie_graph subgraph ---")
 
 
 # Define the graph
@@ -315,14 +362,12 @@ builder.add_node("greeting_and_route_query", greeting_and_route_query)
 builder.add_node("sign_up", sign_up)
 builder.add_node("sign_in", sign_in)
 builder.add_node("ask_user_ratings", ask_user_ratings)
-builder.add_node("recommendation", recommendation)
+builder.add_node("get_first_user_query", get_first_user_query)
+builder.add_node("movie_info_and_recommendation", movie_info_and_recommendation)
 
 builder.add_edge(START, "greeting_and_route_query")
-#builder.add_conditional_edges("greeting_and_route_query", route_query)
-#builder.add_conditional_edges("sign_up", check_registration_data)
-#builder.add_edge("sign_in", END)
-#builder.add_edge("sign_in", "recommendation")
-builder.add_edge("recommendation", END)
+builder.add_edge("sign_in", "ask_user_ratings")
+builder.add_edge("movie_info_and_recommendation", END)
 
 # Compile into a graph object that you can invoke and deploy.
 graph = builder.compile()

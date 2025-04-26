@@ -215,7 +215,7 @@ async def movie_information(
     state.last_active_agent = "movie_information"
 
     # Ask for feedback *after* providing information
-    feedback_request_message = AIMessage(content="Was this information helpful?")
+    feedback_request_message = AIMessage(content="Was this information helpful? Do you have any other questions?")
     state.messages.append(feedback_request_message)
 
     # Route to human node to get feedback via interrupt
@@ -350,7 +350,7 @@ async def movie_recommendation(
     state.last_active_agent = "movie_recommendation"
 
     # Ask for feedback *after* providing recommendations
-    feedback_request_message = AIMessage(content="What do you think of these recommendations?")
+    feedback_request_message = AIMessage(content="What do you think of these recommendations? Do you have any other questions?")
     state.messages.append(feedback_request_message)
 
     # Route to human node to get feedback via interrupt
@@ -370,11 +370,12 @@ async def movie_recommendation(
 @log_node_state_after_return
 async def evaluation(
     state: RecommendationAgentState, *, config: RunnableConfig
-) -> Command[Literal["movie_information", "movie_recommendation", "__end__"]]:
+) -> Command[Literal["movie_information", "movie_recommendation", "analyze_and_route_query", "__end__"]]:
     """
     Evaluates the user's feedback (received via human_node interrupt) on the previous agent's response,
     saves preferences, and updates the state with a report, mood, and satisfaction status.
-    Routes based on satisfaction and the last active agent. # <-- Updated description
+    Includes retry logic for agent output parsing.
+    Routes based on satisfaction and the last active agent.
     """
     # Load agent's configuration settings
     configuration = AgentConfiguration.from_runnable_config(config)
@@ -395,50 +396,90 @@ async def evaluation(
         msg for msg in chat_history if not isinstance(msg, ToolMessage)
     ]
 
-    # Invoke the evaluator agent with the user feedback and chat history
-    structured_response = await evaluator_agent.ainvoke({
-        "input": user_feedback_message.content,
-        "chat_history": filtered_chat_history,
-    })
+    # --- Retry Logic ---
+    MAX_RETRIES = 3
+    structured_response_dict = None
+    raw_agent_output = "" # Initialize raw_agent_output
 
-    # Extract the structured response
-    structured_response_dict = format_agent_structured_output(structured_response["output"])
+    for attempt in range(MAX_RETRIES):
+        try:
+            # Invoke the evaluator agent with the user feedback and chat history
+            structured_response = await evaluator_agent.ainvoke({
+                "input": user_feedback_message.content,
+                "chat_history": filtered_chat_history,
+            })
+
+            # Extract the raw output and attempt to parse
+            raw_agent_output = structured_response.get("output", "")
+            structured_response_dict = format_agent_structured_output(raw_agent_output)
+
+            # Check if parsing was successful
+            if structured_response_dict is not None:
+                # Successfully parsed, break the loop
+                break
+            else:
+                 # Parsing failed, raise an error to be caught by the except block
+                 raise ValueError("Agent output parsing failed, returned None.")
+
+        except (AttributeError, ValidationError, TypeError, ValueError, Exception) as e:
+            print(f"Error during evaluation agent processing (attempt {attempt + 1}/{MAX_RETRIES}): {e}")
+            print(f"Raw Output: {raw_agent_output}") # Log raw output on error
+            if attempt + 1 >= MAX_RETRIES:
+                print("Max retries reached for evaluation agent. Proceeding with default values.")
+                # Set default/error values if max retries are reached
+                structured_response_dict = {
+                    "preferences_saved_confirmation": "Error processing feedback.",
+                    "is_user_satisfied": True, # Default to satisfied to avoid looping on error
+                    "has_user_other_questions": False,
+                    "report": ["Agent failed to process feedback."],
+                    "mood": []
+                }
+                # Break the loop after setting defaults on max retries
+                break
+            else:
+                await asyncio.sleep(1) # Wait before retrying
+                continue # Go to the next attempt
+    # --- End of Retry Logic ---
+
 
     # Handle potential missing keys gracefully
     preferences_saved_confirmation = structured_response_dict.get("preferences_saved_confirmation", "No preference update status available.")
     is_user_satisfied = structured_response_dict.get("is_user_satisfied", True)
+    has_user_other_questions = structured_response_dict.get("has_user_other_questions", False)
     report = structured_response_dict.get("report", [])
     mood = structured_response_dict.get("mood", [])
 
-    # Append confirmation message if provided and not empty/default
+    # Append confirmation message if provided and not empty/default/error
     confirmation_message = None
-    if preferences_saved_confirmation and preferences_saved_confirmation != "No new preferences identified to save.":
+    # Check if confirmation is meaningful and not the error/default message
+    if preferences_saved_confirmation and preferences_saved_confirmation not in ["No new preferences identified to save.", "Error processing feedback.", "No preference update status available."]:
          confirmation_message = AIMessage(content=preferences_saved_confirmation)
-         state.messages.append(confirmation_message)
+         # Avoid adding duplicate confirmation messages
+         if not state.messages or state.messages[-1].content != confirmation_message.content:
+             state.messages.append(confirmation_message)
 
     # Update state with evaluation results
     state.is_user_satisfied = is_user_satisfied
+    state.has_user_other_questions = has_user_other_questions
     state.report = report
     state.mood = mood
 
     # Determine the next step based on user satisfaction and the agent that last responded
-    next_node = END
-    if not is_user_satisfied:
-        if state.last_active_agent == "movie_information":
-            next_node = "movie_information"
-        elif state.last_active_agent == "movie_recommendation":
-            next_node = "movie_recommendation"
-        # Add more conditions here if other agents can lead to evaluation
-        else:
-             # Default fallback if last_active_agent is unknown or not handled
-             # This might indicate a need to refine the logic or handle edge cases
-             print(f"Warning: Unknown last_active_agent '{state.last_active_agent}' in evaluation node. Ending conversation.")
-             next_node = END
+    if is_user_satisfied and has_user_other_questions:
+        # Route back to analyze_and_route_query for further questions
+        next_node = "analyze_and_route_query"
+    elif is_user_satisfied and not has_user_other_questions:
+        # End the conversation if user is satisfied and has no other questions
+        next_node = END
+    else:
+        # Route back to the last active agent if user is Eied
+        next_node = state.last_active_agent 
 
     return Command(
         update={
             "messages": state.messages,
             "is_user_satisfied": state.is_user_satisfied,
+            "has_user_other_questions": state.has_user_other_questions,
             "report": state.report,
             "mood": state.mood,
         },

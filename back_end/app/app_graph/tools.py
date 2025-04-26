@@ -161,6 +161,7 @@ def register_user_tool(state: AppAgentState):
         assert user_id == response.json()["user_id"], "User ID mismatch"
 
         state.is_user_registered = True  # Update the state
+        state.is_user_new = True  # Update the state
 
         # Serialize the results
         message = f"User {state.user_id} has been successfully registered."
