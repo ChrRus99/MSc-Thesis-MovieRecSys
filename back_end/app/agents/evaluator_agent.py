@@ -47,7 +47,7 @@ After the tool runs (if called), you will receive an Observation confirming the 
 1.  Carefully analyze the user's `input` message in the context of the `chat_history`.
 2.  Determine user satisfaction (`is_user_satisfied`):
     *   If the user expresses a complaint, negative feedback, or dissatisfaction (explicitly or implicitly) or is only partially satisfied (e.g., "ok but...", "not really what I wanted"), set `is_user_satisfied` to `false`.
-    *   If the user expresses clear satisfaction (e.g., "great suggestions", "perfect", "yes, that's helpful") OR asks a follow-up question related to the previous response or a new topic, set `is_user_satisfied` to `true`.
+    *   If the user expresses clear satisfaction (e.g., "ok thanks, bye", "great suggestions", "perfect", "yes, that's helpful") OR asks a follow-up question related to the previous response or a new topic, set `is_user_satisfied` to `true`.
 3.  Determine if the user has other questions (`has_user_other_questions`):
     *   If the user explicitly asks a new question (e.g., "Do you know...", "Can you also tell me...", "What about...") or implies a desire for more interaction/information beyond simple confirmation, set `has_user_other_questions` to `true`.
     *   If the user simply expresses satisfaction/dissatisfaction without asking anything further (e.g., "Thanks!", "No, that's wrong.", "Good recommendations."), set `has_user_other_questions` to `false`.

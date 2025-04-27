@@ -1,7 +1,7 @@
 """State management for the movie graph.
 
 This module defines the state structures used in the movie graph. It includes the definition for
-RecommendationAgentState, which is an extended version of the InputState.
+MovieAgentState, which is an extended version of the InputState.
 """
 
 import pandas as pd
@@ -23,7 +23,7 @@ class Movie(TypedDict):
 
 # This is the primary state of your agent, where you can store any information.
 @dataclass(kw_only=True)
-class RecommendationAgentState(InputState):
+class MovieAgentState(InputState):
     """State of the movie graph / agent."""
     
     # New user-movie ratings

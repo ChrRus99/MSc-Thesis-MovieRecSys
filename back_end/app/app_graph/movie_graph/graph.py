@@ -14,7 +14,7 @@ from langchain_core.runnables import RunnableConfig
 
 from app.app_graph.configuration import AgentConfiguration
 from app.shared.state import InputState
-from app.app_graph.movie_graph.state import RecommendationAgentState
+from app.app_graph.movie_graph.state import MovieAgentState
 
 from app.agents.query_analyzer_agent import create_query_analyzer_agent
 from app.agents.movie_information_agent import create_movie_information_agent
@@ -32,7 +32,7 @@ from app.shared.debug_utils import (
 
 @log_node_state_after_return
 async def human_node(
-    state: RecommendationAgentState, *, config: RunnableConfig
+    state: MovieAgentState, *, config: RunnableConfig
 ) -> Command[Literal["evaluation"]]:
     """
     A node for collecting user input via interrupt and routing based on the triggering node.
@@ -62,7 +62,7 @@ async def human_node(
 
 @log_node_state_after_return
 async def analyze_and_route_query(
-    state: RecommendationAgentState, *, config: RunnableConfig
+    state: MovieAgentState, *, config: RunnableConfig
 ) -> Command[Literal["general_question", "movie_information", "movie_recommendation"]]:   
     ### Analyze the query and route it to the appropriate agent
 
@@ -103,7 +103,7 @@ async def analyze_and_route_query(
 
 @log_node_state_after_return
 async def general_question(
-    state: RecommendationAgentState, *, config: RunnableConfig
+    state: MovieAgentState, *, config: RunnableConfig
 ):
     ### Use simple ReactAgent to handle general questions and ask for clarification if needed
     # TODO
@@ -113,7 +113,7 @@ async def general_question(
 
 @log_node_state_after_return
 async def movie_information(
-    state: RecommendationAgentState, *, config: RunnableConfig
+    state: MovieAgentState, *, config: RunnableConfig
 ) -> Command[Literal["human"]]:
     ### Call the movie information agent to retrieve information using KG RAG or Web Search
 
@@ -233,7 +233,7 @@ async def movie_information(
 
 @log_node_state_after_return
 async def movie_recommendation(
-    state: RecommendationAgentState, *, config: RunnableConfig
+    state: MovieAgentState, *, config: RunnableConfig
 ) -> Command[Literal["human"]]:
     ### Call graph recommendation_graph
 
@@ -369,7 +369,7 @@ async def movie_recommendation(
 
 @log_node_state_after_return
 async def evaluation(
-    state: RecommendationAgentState, *, config: RunnableConfig
+    state: MovieAgentState, *, config: RunnableConfig
 ) -> Command[Literal["movie_information", "movie_recommendation", "analyze_and_route_query", "__end__"]]:
     """
     Evaluates the user's feedback (received via human_node interrupt) on the previous agent's response,
@@ -488,7 +488,7 @@ async def evaluation(
 
 
 # Define the graph
-builder = StateGraph(RecommendationAgentState, input=InputState, config_schema=AgentConfiguration)
+builder = StateGraph(MovieAgentState, input=InputState, config_schema=AgentConfiguration)
 builder.add_node("human", human_node)
 builder.add_node("analyze_and_route_query", analyze_and_route_query)
 builder.add_node("general_question", general_question)

@@ -9,7 +9,7 @@ from typing import Annotated, Dict, Tuple, List, Literal, Optional, Any
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import tool, ToolException
 
-from app.app_graph.movie_graph.state import RecommendationAgentState
+from app.app_graph.movie_graph.state import MovieAgentState
 from app.shared.debug_utils import tool_log
 # Import the web search retrieval functions
 from app.web_search.movie_cast_and_crew_web_search_retriever import (
@@ -43,7 +43,7 @@ dotenv_path = os.path.join(project_root, ".env")
 load_dotenv(dotenv_path)
 
 
-def save_user_preferences_tool(state: RecommendationAgentState):
+def save_user_preferences_tool(state: MovieAgentState):
     """
     Creates a tool function to save user's preferences.
 
@@ -51,7 +51,7 @@ def save_user_preferences_tool(state: RecommendationAgentState):
     purposes in the recommendation process.
 
     Args:
-        state (RecommendationAgentState): The current conversation state.
+        state (MovieAgentState): The current conversation state.
 
     Returns:
         Callable: A coroutine tool function that saves user's preferences.
@@ -114,7 +114,7 @@ def save_user_preferences_tool(state: RecommendationAgentState):
     return save_user_preferences
 
 
-def movie_cast_and_crew_kg_rag_information_tool(state: RecommendationAgentState):
+def movie_cast_and_crew_kg_rag_information_tool(state: MovieAgentState):
     """
     Creates a tool function to retrieve movie, cast and crew information from the knowledge graph.
 
@@ -123,7 +123,7 @@ def movie_cast_and_crew_kg_rag_information_tool(state: RecommendationAgentState)
     to provide detailed information about a specific movie, actor or director.
 
     Args:
-        state (RecommendationAgentState): The current conversation state.
+        state (MovieAgentState): The current conversation state.
 
     Returns:
         Callable: A coroutine tool function that retrieves movie information.
@@ -193,7 +193,7 @@ def movie_cast_and_crew_kg_rag_information_tool(state: RecommendationAgentState)
     return movie_cast_and_crew_kg_rag_information
 
 
-def movie_cast_and_crew_web_search_information_tool(state: RecommendationAgentState):
+def movie_cast_and_crew_web_search_information_tool(state: MovieAgentState):
     """
     Creates a tool function to retrieve movie plot, curiosities, or reviews from the web.
 
@@ -204,7 +204,7 @@ def movie_cast_and_crew_web_search_information_tool(state: RecommendationAgentSt
     and opinions about a specific movie.
 
     Args:
-        state (RecommendationAgentState): The current conversation state.
+        state (MovieAgentState): The current conversation state.
 
     Returns:
         Callable: A coroutine tool function that retrieves movie information from the web.
@@ -290,7 +290,7 @@ def movie_cast_and_crew_web_search_information_tool(state: RecommendationAgentSt
 # e.g., genre, year, tagline, actors, directors. --> per la parte di explainability
 # questo va fatto a livello movie_recommendation_system
 
-def popularity_ranking_recommendation_tool(state: RecommendationAgentState):
+def popularity_ranking_recommendation_tool(state: MovieAgentState):
     """
     Creates a tool function to generate recommendations based on popularity ranking.
 
@@ -298,7 +298,7 @@ def popularity_ranking_recommendation_tool(state: RecommendationAgentState):
     tastes, helping the movie_recommendation agent to generate general recommendations.
 
     Args:
-        state (RecommendationAgentState): The current conversation state.
+        state (MovieAgentState): The current conversation state.
 
     Returns:
         Callable: A coroutine tool function that provides movie recommendations based on
@@ -382,7 +382,7 @@ def popularity_ranking_recommendation_tool(state: RecommendationAgentState):
     return popularity_ranking_recommendation
 
 
-def collaborative_filtering_recommendation_tool(state: RecommendationAgentState):
+def collaborative_filtering_recommendation_tool(state: MovieAgentState):
     """
     Creates a tool function to generate user recommendations based on collaborative filtering.
 
@@ -391,7 +391,7 @@ def collaborative_filtering_recommendation_tool(state: RecommendationAgentState)
     personalized recommendations.
 
     Args:
-        state (RecommendationAgentState): The current conversation state.
+        state (MovieAgentState): The current conversation state.
 
     Returns:
         Callable: A coroutine tool function that provides movie recommendations based on 
@@ -475,7 +475,7 @@ def collaborative_filtering_recommendation_tool(state: RecommendationAgentState)
     return collaborative_filtering_recommendation
 
 
-def hybrid_filtering_recommendation_tool(state: RecommendationAgentState):
+def hybrid_filtering_recommendation_tool(state: MovieAgentState):
     """
     Creates a tool function to generate user movie suggestions based on hybrid filtering.
 
@@ -484,7 +484,7 @@ def hybrid_filtering_recommendation_tool(state: RecommendationAgentState):
     personalized suggestions.
 
     Args:
-        state (RecommendationAgentState): The current conversation state.
+        state (MovieAgentState): The current conversation state.
 
     Returns:
         Callable: A coroutine tool function that provides movie suggestions based on hybrid 
