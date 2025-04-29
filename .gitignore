@@ -10,5 +10,4 @@ old/
 trained_models/
 data/
 **/logs/
-**/.env
 .vs/

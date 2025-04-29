@@ -8,7 +8,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 WORKDIR /app
 
 # Copy project files
-COPY requirements.txt .
+COPY requirements.txt . 
 COPY .env /app/.env
 COPY event_handlers/ /app/event_handlers/
 COPY wait-for-kafka.sh /app/wait-for-kafka.sh

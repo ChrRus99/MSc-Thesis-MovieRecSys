@@ -11,6 +11,10 @@ COPY microservices/ /app/microservices/
 COPY movie_recommendation_system/src /app/movie_recommendation_system/
 COPY db_handlers/ /app/db_handlers/
 COPY data/ /app/data/
+COPY wait-for-kafka.sh /app/wait-for-kafka.sh
+
+# Make sure the script is executable
+RUN chmod +x /app/wait-for-kafka.sh
 
 # Install necessary system libraries and CUDA
 RUN apt-get update && apt-get install -y --no-install-recommends \
