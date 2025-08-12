@@ -65,8 +65,3 @@ class ModelHandlerInterface(ABC):
             The prediction result, specific to the implementation.
         """
         pass
-    def __init__(self, datset=None, model=None, algo=None, trainset=None):
-        self._dataset = datset
-        self._model = model
-        self._algo = algo
-        self._trainset = trainset
